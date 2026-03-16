@@ -72,12 +72,22 @@ parser.add_argument('--num_runs', type=int, default=10,
 parser.add_argument('--plot_path', type=str, default=None,
                     help='path for final plot file (can be .png or .pdf)')
 # 缓存目录（存储Inception embeddings）
-parser.add_argument('--cache_dir', type=str, default='/tmp/prd_cache/',
+# 默认在当前脚本目录下创建 prd_cache 文件夹
+default_cache_dir = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    'prd_cache'
+)
+parser.add_argument('--cache_dir', type=str, default=default_cache_dir,
                     help='cache directory')
 # 预训练的Inception.pth文件路径（PyTorch权重格式）
+# 如果不指定，将自动下载到当前脚本目录
+default_inception_path = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), 
+    'inception_v3.pth'
+)
 parser.add_argument('--inception_path', type=str,
-                    default='/tmp/prd_cache/inception_v3.pth',
-                    help='path to pre-trained Inception V3 .pth file')
+                    default=default_inception_path,
+                    help='path to pre-trained Inception V3 .pth file (auto-downloads if not found)')
 # 是否输出日志信息
 parser.add_argument('--silent', dest='verbose', action='store_false',
                     help='disable logging output')
