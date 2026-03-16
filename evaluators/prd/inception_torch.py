@@ -13,6 +13,76 @@ import torch.nn as nn
 from torchvision import models
 from torchvision import transforms
 import torch.nn.functional as F
+import urllib.request
+from pathlib import Path
+
+
+def download_inception_v3_weights(save_path=None):
+    """
+    自动下载预训练的 Inception V3 权重文件
+    
+    参数：
+        save_path: 保存位置，如果为None，则保存到当前脚本目录
+    
+    返回：
+        保存的文件路径
+    """
+    if save_path is None:
+        # 获取当前脚本所在目录
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        save_path = os.path.join(script_dir, 'inception_v3.pth')
+    
+    # 如果文件已存在，直接返回
+    if os.path.exists(save_path):
+        print(f"✓ Inception V3 权重文件已存在: {save_path}")
+        return save_path
+    
+    # 创建保存目录
+    save_dir = os.path.dirname(save_path)
+    if save_dir and not os.path.exists(save_dir):
+        os.makedirs(save_dir, exist_ok=True)
+    
+    print("\n" + "="*70)
+    print("下载 Inception V3 预训练权重")
+    print("="*70)
+    print(f"正在下载到: {save_path}")
+    print(f"文件大小: ~104 MB (首次下载，可能需要几分钟)\n")
+    
+    # 官方的Inception V3权重URL（来自PyTorch官方）
+    url = 'https://download.pytorch.org/models/inception_v3_google-1a9a5a14.pth'
+    
+    try:
+        # 定义进度条回调函数
+        def download_progress(block_num, block_size, total_size):
+            downloaded = block_num * block_size
+            percent = min(downloaded * 100 / total_size, 100)
+            bar_length = 40
+            filled_length = int(bar_length * downloaded / total_size)
+            bar = '█' * filled_length + '░' * (bar_length - filled_length)
+            print(f'\r下载进度: |{bar}| {percent:.1f}%', end='', flush=True)
+        
+        # 下载文件
+        urllib.request.urlretrieve(url, save_path, reporthook=download_progress)
+        print()  # 换行
+        
+        # 验证下载的文件
+        if os.path.exists(save_path):
+            file_size = os.path.getsize(save_path) / (1024 * 1024)  # 转换为MB
+            print(f"\n✓ 下载成功！文件大小: {file_size:.2f} MB")
+            print(f"✓ 保存位置: {save_path}")
+            print("="*70 + "\n")
+            return save_path
+        else:
+            raise Exception("下载后文件不存在")
+    
+    except Exception as e:
+        print(f"\n✗ 下载失败: {str(e)}")
+        print("\n备选方案:")
+        print("1. 请检查网络连接")
+        print("2. 可以手动从以下地址下载:")
+        print(f"   {url}")
+        print(f"3. 下载后放置在: {save_path}")
+        raise
 
 
 class InceptionV3FeatureExtractor(nn.Module):
@@ -27,6 +97,7 @@ class InceptionV3FeatureExtractor(nn.Module):
         
         参数：
             inception_path: 预训练权重文件的路径（.pth格式）
+                           如果为None且权重文件不存在，将自动下载到当前目录
             layer_name: 要提取特征的层名称，支持：
                        - 'avg_pool': 平均池化层输出（默认，维度2048）
                        - 'fc': 全连接层输出（维度1000）
@@ -36,11 +107,20 @@ class InceptionV3FeatureExtractor(nn.Module):
         # 加载预训练的Inception V3模型
         self.inception = models.inception_v3(pretrained=False)
         
-        # 如果提供了权重路径，加载自定义权重
-        if inception_path and os.path.exists(inception_path):
-            self.load_weights(inception_path)
-        else:
-            print("⚠️  警告: 未加载预训练权重，模型使用随机初始化参数运行!")
+        # 处理权重路径逻辑
+        if inception_path is None:
+            # 如果未指定路径，使用当前脚本目录下的 inception_v3.pth
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            inception_path = os.path.join(script_dir, 'inception_v3.pth')
+        
+        # 如果权重文件不存在，自动下载
+        if not os.path.exists(inception_path):
+            print(f"\n⚠️  权重文件未找到: {inception_path}")
+            print("正在为您自动下载...\n")
+            inception_path = download_inception_v3_weights(inception_path)
+        
+        # 加载权重
+        self.load_weights(inception_path)
         
         # 设置特征提取层
         self.layer_name = layer_name
@@ -164,12 +244,25 @@ class InceptionV3FeatureExtractor(nn.Module):
         前向传播，提取指定层的特征
         
         参数：
-            x: 输入张量，形状 [batch_size, 3, 299, 299]
-               像素值范围 [-1, 1]（已经过preprocess_for_inception处理）
+            x: 输入张量，形状可以是：
+               - [batch_size, height, width, 3] (NHWC) - 像素值 [0, 255]
+               - [batch_size, 3, 299, 299] (NCHW) - 像素值 [0, 255]
+               - 预处理后的格式 [batch_size, 3, 299, 299] - 像素值 [-1, 1]
         
         返回：
             特征张量，形状 [batch_size, feature_dim]
         """
+        # 自动预处理输入（如果需要）
+        if x.ndim == 4:
+            # 检查是否已经预处理过（像素范围 [-1, 1] 且尺寸 299x299）
+            is_normalized = (x.min() >= -1.5 and x.max() <= 1.5)
+            is_correct_size = (x.shape[2] == 299 and x.shape[3] == 299) or \
+                             (x.shape[-2] == 299 and x.shape[-1] == 299)
+            
+            # 如果没有预处理，则预处理
+            if not (is_normalized and is_correct_size):
+                x = preprocess_for_inception(x)
+        
         # 确保模型处于评估模式
         self.eval()
         
@@ -234,13 +327,29 @@ def preprocess_for_inception(images):
     if images.dtype != torch.float32:
         images = images.float()
     
-    # 处理不同的输入格式
-    # 如果输入格式是 [B, H, W, 3]，转换为 [B, 3, H, W]
-    if images.ndim == 4 and images.shape[-1] == 3:
-        images = images.permute(0, 3, 1, 2).contiguous()
+    # 验证输入维度
+    if images.ndim != 4:
+        raise ValueError(f'Expected 4D tensor, got {images.ndim}D tensor with shape {images.shape}')
     
-    # 验证通道数
-    assert images.shape[1] == 3, f'Expected 3 channels, got {images.shape[1]}'
+    # 处理不同的输入格式
+    # 判断输入是 NHWC [B, H, W, C] 还是 NCHW [B, C, H, W]
+    # NHWC 格式的特征：最后一维是 3（RGB 通道）
+    # NCHW 格式的特征：第二维是 3（RGB 通道）
+    
+    if images.shape[-1] == 3:
+        # NHWC 格式 [B, H, W, 3] → 转换为 NCHW [B, 3, H, W]
+        images = images.permute(0, 3, 1, 2).contiguous()
+    elif images.shape[1] == 3:
+        # 已经是 NCHW 格式 [B, 3, H, W]，不需要转换
+        pass
+    else:
+        raise ValueError(
+            f'Expected 3 channels (RGB), but got shape {images.shape}. '
+            f'Input should be either [B, H, W, 3] (NHWC) or [B, 3, H, W] (NCHW) format.'
+        )
+    
+    # 验证通道数（此时应该是 NCHW 格式）
+    assert images.shape[1] == 3, f'Expected 3 channels at dim 1, got {images.shape[1]}'
     
     # 调整图像尺寸到299x299（Inception V3的标准输入尺寸）
     # 对应TensorFlow中tf.contrib.gan.eval.preprocess_image的行为
