@@ -571,12 +571,61 @@ kid_score = fid.compute_kid(
 ```
 
 ---
+### Precision and Recall for Distribution
 
+参考文献：[Assessing Generative Models via Precision and Recall](https://arxiv.org/abs/1806.00035v2)
+
+两个核心概念：**Precision** 和 **Recall**
+
+#### Precision
+又称精确率，是衡量生成分布 $Q$ 中有多少可以被真实分布 $P$ 的“一部分”生成（即生成样本的质量）
+
+#### Recall
+又称召回率，衡量真实分布 $P$ 中有多少可以被生成分布 $Q$ 的“一部分”生成（即模型对真实数据的覆盖率/多样性）
+
+这个概念在深度学习里还是比较常见的，但是运用在图像生成评估中是有不一样的地方的。
+
+出于原文：
+> It should be noted that unlike PR curves for binary classification where different thresholds lead to 
+different classifiers, trade-offs between precision and recall here do not constitute different models
+or distributions – the proposed PRD curves only serve as a description of the characteristics of the
+model with respect to the target distribution.
+
+#### 特征提取
+
+其实这一步是让我有点失望的，因为作者第一步仍然使用了Inception模型去提取特征，这其实影响了模型评估的准确性。
+
+（还差个原理）
 
 
 ---
+#### 代码
+源代码仓库[precision-recall-distributions](https://github.com/msmsajjadi/precision-recall-distributions).
 
+作者是基于tensorflow实现的，所以本项目主要工作为：
 
+- 用pytorch重写
+- 用一个脚本，集成至`./evaluators/`下
 
+**重写过程**
+
+源代码中最主要的脚本是`prd_from_image_folders.py`，涉及到的自建导入模块有
+```python
+# 导入自定义的Inception网络模块
+import inception
+# 导入自定义的PRD（精确率-召回率）计算模块
+import prd_score as prd
+```
+其中`prd_score`模块内部不涉及自建模块，所以只有`inception`模块所涉及到的代码需要改写。
+
+`inception`又涉及到`inception_network`模块，所以一共有两个大模块需要重写。
+
+但是：**注意源代码时被调用以上函数时，tensorflow所返回到数据类型需要重写和检查。**
+
+下面开始重写：
+
+（过程先省略）
+
+---
 [^1]:又称离散时间马尔可夫链，该过程要求具备“无记忆”性质：下一状态的概率分布只能由当前状态决定，在时间序列中它前面的事件均与之无关
 [^2]:$$

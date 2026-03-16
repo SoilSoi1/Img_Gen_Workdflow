@@ -118,3 +118,6 @@ class BaseModel(nn.Module):
     def _inference_step(self, z): 
         raise NotImplementedError
 ```
+
+
+(补充目前存在实质内容的文件的描述)
