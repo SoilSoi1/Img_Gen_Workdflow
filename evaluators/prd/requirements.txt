@@ -1,0 +1,18 @@
+# PRD (Precision-Recall Distribution) 评估工具依赖
+# Python 版本: 3.7+
+# PyTorch: 已安装
+
+# 计算机视觉和深度学习
+numpy>=1.19.0
+opencv-python>=4.5.0
+torchvision>=0.8.0
+
+# 科学计算和数据处理
+scipy>=1.5.0
+scikit-learn>=0.24.0
+
+# 可视化
+matplotlib>=3.3.0
+
+# 其他工具
+Pillow>=8.0.0
