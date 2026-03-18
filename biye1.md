@@ -627,5 +627,108 @@ import prd_score as prd
 （过程先省略）
 
 ---
-[^1]:又称离散时间马尔可夫链，该过程要求具备“无记忆”性质：下一状态的概率分布只能由当前状态决定，在时间序列中它前面的事件均与之无关
+### LPIPS
+
+LPIPS全称为Learned Perceptual Image Patch Similarity，来源文献[The Unreasonable Effectiveness of Deep Features as a Perceptual Metric](https://arxiv.org/abs/1801.03924)。与FID、KID不同，LPIPS是一种**感知相似度度量**，用于比较两张图像在人类视觉感知上的接近程度。
+
+#### 数学原理
+
+LPIPS的核心思想是利用预训练的深度神经网络的中间层特征来衡量两张图像的相似度。与基于像素级别的欧氏距离不同，LPIPS从感知的角度出发，捕捉人眼更关心的高级特征差异。
+
+对于两张图像 $x$ 和 $y$，LPIPS的计算公式为：
+$$
+LPIPS(x, y) = \sum_l \sum_h, w w_l \left\| \hat{f}_l^x(h, w) - \hat{f}_l^y(h, w) \right\|_2^2
+$$
+
+其中 $l$ 表示网络的第 $l$ 层，$(h, w)$ 表示特征图的空间位置，$\hat{f}$ 表示归一化后的特征，$w_l$ 是可学习或固定的权重。
+
+与逐像素比较不同，这种方法能够感知图像的语义内容和纹理特征，更符合人类的视觉感知。原文通过人类视觉评价实验证实，LPIPS与人类判断的相关性远高于简单的L2距离。
+
+#### 使用场景
+
+在生成模型的评估中，LPIPS可以用两种方式：
+
+1. **成对比较（Pairwise Comparison）**：计算生成图像与真实图像的相似度，分数越低表示生成质量越好。这种方式适合评估单个生成样本的真实性。
+
+2. **集合内相似度（Intra-set Similarity）**：计算数据集内所有图像对的LPIPS，取平均值来衡量生成样本之间的多样性。分数越高表示多样性越好，越低表示样本之间相似度越高（可能出现模式坍缩）。
+
+本项目采用第二种方式，即对生成图像数据集内部进行两两配对计算。由于完整的两两配对会产生 $O(n^2)$ 的计算复杂度，对于大数据集不现实，实现中支持随机采样策略来控制计算量。
+
+#### 代码实现
+
+脚本保存在`lpips_pairwise.py`中，函数名为`cal_lpips_pairwise`。
+
+实现目标：针对一个图像文件夹，计算其内部图像对的LPIPS平均值。
+
+```python
+def cal_lpips_pairwise(image_dir: str, device: str = 'cuda', net: str = 'alex', sample_pairs: int = None) -> float:
+    """
+    计算图像数据集中图像对的LPIPS，返回平均分数
+    
+    参数:
+        image_dir (str): 图像文件夹路径
+        device (str): 计算设备 ('cuda' 或 'cpu')
+        net (str): LPIPS网络类型 ('alex', 'vgg', 'squeeze')
+        sample_pairs (int): 随机采样的图像对数，None表示计算所有配对
+    
+    返回:
+        float: 图像对的平均LPIPS分数
+    """
+```
+
+函数支持三种感知网络：AlexNet、VGG和SqueezeNet。其中AlexNet是最常用的选择，计算速度最快。对于 $n$ 个图像，完整配对会产生 $\frac{n(n-1)}{2}$ 对。当数据集较大时，可以通过 `sample_pairs` 参数进行随机采样，例如 `sample_pairs=1000` 表示从所有可能的配对中随机选择1000对进行计算。
+
+计算过程使用 `tqdm` 库显示实时进度条，便于监控长时间的计算任务。
+
+---
+### BRISQUE
+
+BRISQUE全称为Blind/Referenceless Image Spatial Quality Evaluator，是一种**无参考（blind）** 的图像质量评估方法。与FID、KID依赖参考图像不同，BRISQUE可以直接评估单张图像的质量而无需与标准答案进行比较。
+
+#### 数学原理
+
+本实现采用Laplacian方差作为图像清晰度的度量，这是一种简化但有效的无参考质量评估方法。Laplacian算子用于检测图像中的高频成分（边界、细节等）。
+
+对输入图像应用Laplacian卷积核：
+$$
+L = \begin{pmatrix} 0 & -1 & 0 \\ -1 & 4 & -1 \\ 0 & -1 & 0 \end{pmatrix}
+$$
+
+然后计算Laplacian变换结果的方差：
+$$
+Score = \mathrm{Var}(L * I)
+$$
+
+其中 $I$ 为灰度图像，$*$ 表示卷积操作。Laplacian方差越高表示图像中的边界和细节越丰富，通常意味着图像质量越好。反之，模糊或失真的图像会产生较低的Laplacian方差。
+
+#### 优缺点
+
+这种方法的优势在于计算速度极快，不需要任何预训练模型，完全依赖图像本身的特征。缺点是它对所有类型的失真敏感度不一致，对某些特殊类型的失真（如某些形式的压缩）可能不够敏感。
+
+#### 使用场景
+
+Laplacian方差主要用于检测生成图像的清晰度和细节保留情况。在生成模型评估中，可用于快速筛选严重失真的图像。较高的分数表示图像具有良好的视觉锐度。
+
+#### 代码实现
+
+脚本保存在`brisque.py`中，函数名为`cal_brisque`。
+
+实现目标：对单个图像文件夹内的所有图像计算清晰度分数，并返回平均值。
+
+```python
+def cal_brisque(image_dir: str) -> float:
+    """
+    计算图像数据集的清晰度分数（基于Laplacian方差），返回平均值
+    
+    参数:
+        image_dir (str): 图像文件夹路径
+    
+    返回:
+        float: 数据集中所有图像的平均清晰度分数
+    """
+```
+
+该实现使用 `scipy` 的卷积函数，无需额外的深度学习库，计算速度快。进度条用于监控处理过程。
+
+---[^1]:又称离散时间马尔可夫链，该过程要求具备“无记忆”性质：下一状态的概率分布只能由当前状态决定，在时间序列中它前面的事件均与之无关
 [^2]:$$
