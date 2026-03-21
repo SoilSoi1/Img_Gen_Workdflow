@@ -67,9 +67,8 @@ def get_dataloader(train_root, val_root, batch_size=16, num_workers=0, pin_memor
     transforms.RandomRotation(30),
     transforms.RandomHorizontalFlip(),
     transforms.CenterCrop((512, 512)),
-    transforms.Grayscale(num_output_channels=1),
     transforms.ToTensor(),
-    transforms.Normalize(mean=[0.5], std=[0.5]),
+    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
 ])
 
     val_transform = transforms.Compose([

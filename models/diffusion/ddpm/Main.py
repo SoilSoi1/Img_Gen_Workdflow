@@ -24,7 +24,7 @@ modelConfig = {
     "sampledNoisyImgName": "NoisyNoGuidenceImgs.png",
     "sampledImgName": "SampledNoGuidenceImgs.png",
     "nrow": 8,
-    "input_channel":1
+    "input_channel":3
     }
 def main(model_config = None):
     if model_config is not None:

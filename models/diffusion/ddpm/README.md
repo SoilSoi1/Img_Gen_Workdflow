@@ -65,7 +65,7 @@
     - `attn`：应用自注意力的阶段索引
     - `num_res_blocks`：每阶段的残差块数
     - `dropout`：dropout比率
-    - `input_channel`：输入通道数（默认1用于灰度图）
+    - `input_channel`：输入通道数（默认3用于RGB图）
 
 ---
 
@@ -190,10 +190,10 @@ clean-fid  # 可选，用于FID评估
 
 本实现基于 [DDPM-PyTorch](https://github.com/zoubohao/DenoisingDiffusionProbabilityModel-ddpm-/) 做了以下重要修改：
 
-#### 1. **输入通道数配置**（灰度图支持）
+#### 1. **输入通道数配置**（RGB三通道）
 - 在 `Main.py` 的 `modelConfig` 中添加了 `input_channel` 参数
 - 在 `Model.py` 的 `UNet` 类中适配了可变的输入通道数
-- 支持灰度图（`input_channel=1`）和RGB图（`input_channel=3`）
+- 使用RGB图象（`input_channel=3`）
 
 #### 2. **数据归一化修正**（👈 **最关键！**）
 **问题**：原始实现使用ImageNet归一化 `Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])` 会导致像素值范围为 `[-1.996, 2.449]`，与扩散模型所需的 `[-1, 1]` 范围不符，造成SNR不匹配。
@@ -201,7 +201,7 @@ clean-fid  # 可选，用于FID评估
 **解决方案**：在 `dataset.py` 中修改为：
 ```python
 transforms.ToTensor(),  # [0,1]
-transforms.Normalize(mean=[0.5], std=[0.5])  # → [-1,1]
+transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])  # RGB → [-1,1]
 ```
 
 **为什么是 [-1,1]？**
@@ -253,9 +253,9 @@ newest_data/
 
 #### 重要配置说明
 
-| 参数 | 说明 | 灰度图建议 |
+| 参数 | 说明 | 建议值 |
 |-----|------|---------|
-| `input_channel` | 输入通道数 | **1**（灰度）|
+| `input_channel` | 输入通道数 | **3**（RGB）|
 | `img_size` | 输入分辨率 | 512×512 |
 | `batch_size` | 批大小（受显存限制） | 2-4 |
 | `T` | 扩散时间步数 | 400（平衡质量与速度）|
