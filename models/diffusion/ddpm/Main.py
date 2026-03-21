@@ -18,14 +18,14 @@ modelConfig = {
     "grad_clip": 1.,
     "device": "cuda:0", ### MAKE SURE YOU HAVE A GPU !!!
     # Dataset paths
-    "train_root": "./newest_data/train/",
-    "val_root": "./newest_data/val/",
+    "train_root": None,
+    "val_root": None,
     "num_workers": 4,
     "pin_memory": True,
     # Training & Checkpoints
-    "training_load_weight": "last_ckpt.pt",
+    "training_load_weight": None,
     "save_weight_dir": "./Checkpoints/",
-    "test_load_weight": "last_ckpt.pt",
+    "test_load_weight": None,
     # Sampling & Inference
     "sampled_dir": "./SampledImgs/",
     "sampledNoisyImgName": "NoisyNoGuidenceImgs.png",

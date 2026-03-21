@@ -31,6 +31,7 @@ def count_images_in_dir(dir_path):
 def setup_training_config(args):
     """
     基于命令行参数和数据集大小设置训练配置
+    支持两种训练模式: epoch 模式 或 iteration 模式
     
     返回:
         dict: 更新后的 modelConfig
@@ -56,15 +57,26 @@ def setup_training_config(args):
     print(f"👉 每个 epoch 的迭代次数: {iterations_per_epoch}")
     print(f"   (数据集: {train_img_count} 张图 / 批大小: {batch_size})")
     
-    # 2. 基于总迭代次数计算所需 epoch 数
-    total_iterations = args.total_iterations
-    required_epochs = (total_iterations + iterations_per_epoch - 1) // iterations_per_epoch
-    actual_iterations = required_epochs * iterations_per_epoch
-    
-    print(f"\n📊 迭代计划:")
-    print(f"   目标总迭代次数: {total_iterations:,}")
-    print(f"   所需 epoch 数:  {required_epochs}")
-    print(f"   实际总迭代次数: {actual_iterations:,} (比目标多 {actual_iterations - total_iterations:,})")
+    # 2. 根据 epoch 或 iteration 模式计算所需 epoch 数
+    if args.use_epoch is not None:
+        # === EPOCH 模式 ===
+        required_epochs = args.use_epoch
+        actual_iterations = required_epochs * iterations_per_epoch
+        
+        print(f"\n📊 训练计划 (EPOCH 模式):")
+        print(f"   指定 epoch 数:   {required_epochs}")
+        print(f"   总迭代次数:      {actual_iterations:,}")
+        
+    else:
+        # === ITERATION 模式 (默认) ===
+        total_iterations = args.total_iterations if args.total_iterations is not None else 50000
+        required_epochs = (total_iterations + iterations_per_epoch - 1) // iterations_per_epoch
+        actual_iterations = required_epochs * iterations_per_epoch
+        
+        print(f"\n📊 训练计划 (ITERATION 模式):")
+        print(f"   目标总迭代次数: {total_iterations:,}")
+        print(f"   所需 epoch 数:  {required_epochs}")
+        print(f"   实际总迭代次数: {actual_iterations:,} (比目标多 {actual_iterations - total_iterations:,})")
     
     # 3. 更新 modelConfig
     modelConfig["epoch"] = required_epochs
@@ -118,6 +130,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
+  # ===== ITERATION 模式 (基于总迭代次数) =====
+  
   # 基础使用 - 训练共 50,000 次迭代
   python train_quick.py --total_iterations 50000
 
@@ -132,15 +146,40 @@ def main():
     --train_root /path/to/train \\
     --val_root /path/to/val \\
     --ckpt_name "custom_exp"
+
+  # ===== EPOCH 模式 (基于 epoch 数) =====
+  
+  # 直接指定 epoch 数 (不需要计算)
+  python train_quick.py --epoch 100
+
+  # 使用 epoch 模式 + 自定义 checkpoint 名称
+  python train_quick.py --epoch 100 --ckpt_name "exp_1"
+
+  # 使用 epoch 模式 + 自定义数据路径
+  python train_quick.py --epoch 100 \\
+    --train_root /path/to/train \\
+    --val_root /path/to/val \\
+    --ckpt_name "my_exp"
+
+  # 注意: --total_iterations 和 --epoch 互斥，只能选择其中一个
         """
     )
     
-    # ========== 迭代次数相关参数 ==========
-    parser.add_argument(
+    # ========== 迭代次数相关参数 (互斥: 选择 epoch 或 iteration 模式) ==========
+    train_mode_group = parser.add_mutually_exclusive_group()
+    
+    train_mode_group.add_argument(
         "--total_iterations",
         type=int,
-        default=50000,
-        help="总迭代次数 (默认: 50000)"
+        default=None,
+        help="总迭代次数 (与 --epoch 二选一，默认模式)"
+    )
+    
+    train_mode_group.add_argument(
+        "--epoch",
+        type=int,
+        dest="use_epoch",
+        help="训练总 epoch 数 (与 --total_iterations 二选一)"
     )
     
     parser.add_argument(

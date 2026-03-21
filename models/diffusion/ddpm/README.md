@@ -83,22 +83,17 @@
 
 #### 4. **dataset.py** - 数据加载
 
-- **`LowTimesDataset`**：自定义Dataset类
-  - 加载存储在 `tight/` 和 `leak/` 子文件夹的图像
-  - 类标签映射：`tight`→0，`leak`→1
-  - **多路输出**（用于多模态融合）：
-    - `img_resnet`：512×512灰度图（ResNet路径）
-      - 随机旋转、翻转、中心裁剪
-      - 灰度化、ToTensor、Normalize([0.5], [0.5])
-    - `img_vit`：224×224 RGB图（ViT路径）
-      - 随机裁剪、ToTensor、ImageNet Normalize
-    - `label`：类标签张量
+- **`LowTimesDataset`**：自定义Dataset类（已简化）
+  - 递归扫描 `image_dir` 中所有子文件夹的图像（无文件夹结构限制）
+  - 返回仅包含图像的三元组 `(img_resnet, None, None)`，兼容训练脚本
+  - 无标签逻辑，无ViT分支，纯生成任务优化
+  - 输入处理：512×512图像，应用 train_transform
 
-- **`get_dataloader()`**：处理器函数
-  - 创建训练和验证DataLoader
-  - 返回：`(train_loader, val_loader)`
+- **`get_dataloader()`**：DataLoader工厂函数
+  - 创建训练DataLoader
+  - 返回：`(train_loader, None)` 格式
   - 参数：
-    - `train_root`, `val_root`：数据路径
+    - `train_root`：训练数据目录
     - `batch_size`, `num_workers`, `pin_memory`：DataLoader配置
 
 ---
@@ -375,7 +370,7 @@ modelConfig["img_size"] = 256
 
 ### 🎯 核心特性
 
-1. **基于迭代次数的训练量定义** - 指定总迭代次数，脚本自动计算所需 epoch 数
+1. **两种训练模式** - ITERATION 模式（指定总迭代次数）或 EPOCH 模式（指定epoch数）
 2. **灵活的 Checkpoints 管理** - 自定义文件夹名称 + 自动时间戳 + 灵活保存间隔
 3. **优雅的训练日志** - JSON 格式，记录每 epoch 的 loss、学习率、迭代数、时间戳
 4. **断点续训支持** - 轻松从中断位置恢复训练
@@ -383,34 +378,31 @@ modelConfig["img_size"] = 256
 
 ### 🚀 快速开始
 
-#### 最简单的使用（默认参数）
+#### ITERATION 模式（指定总迭代次数）
 ```bash
+# 最简单的使用（默认参数）
 python train_quick.py --total_iterations 50000
-```
 
-这会自动：
-- 读取 `./newest_data/train/` 中的数据
-- 计算每 epoch 的迭代次数（数据量 / batch_size）
-- 计算所需 epoch 数
-- 在 `./Checkpoints/{timestamp}/` 下保存权重和日志
-
-#### 自定义 Checkpoints 名称
-```bash
+# 自定义 Checkpoints 名称
 python train_quick.py --total_iterations 50000 --ckpt_name "exp_1"
-```
-会创建：`./Checkpoints/exp_1/{timestamp}/`
 
-#### 设置保存间隔
+# 每 5000 次迭代保存一次
+python train_quick.py --total_iterations 50000 --ckpt_name "exp_1" --ckpt_interval 5000
+```
+
+#### EPOCH 模式（指定 epoch 数）
 ```bash
-python train_quick.py \
-  --total_iterations 50000 \
-  --ckpt_name "exp_1" \
-  --ckpt_interval 5000
-```
-- 每 5,000 次迭代保存一次权重
-- 脚本自动转换为 epoch 间隔
+# 直接指定 100 个 epoch
+python train_quick.py --epoch 100 --ckpt_name "exp_1"
 
-#### 自定义数据路径
+# 无需计算，直观明了
+python train_quick.py --epoch 100 \
+  --train_root /path/to/train \
+  --val_root /path/to/val \
+  --ckpt_name "my_exp"
+```
+
+#### 自定义数据路径（两种模式都适用）
 ```bash
 python train_quick.py \
   --total_iterations 50000 \
@@ -430,7 +422,7 @@ python train_quick.py \
 #### 仅检查配置（不训练）
 ```bash
 python train_quick.py \
-  --total_iterations 50000 \
+  --epoch 100 \
   --train_root /path/to/data \
   --dry_run  # 只打印配置，不开始训练
 ```
@@ -472,10 +464,15 @@ python train_quick.py \
 
 ### 📝 命令行参数完整列表
 
-#### 迭代次数相关
+#### 训练模式选择（互斥）
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `--total_iterations` | int | 50000 | 总迭代次数 |
+| `--total_iterations` | int | 50000 | 总迭代次数（ITERATION 模式，与 --epoch 二选一） |
+| `--epoch` | int | None | 训练总 epoch 数（EPOCH 模式，与 --total_iterations 二选一） |
+
+#### 批处理配置
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
 | `--batch_size` | int | 2 | 批大小 |
 
 #### 数据集路径
@@ -542,23 +539,67 @@ Checkpoints/
 }
 ```
 
-### 🔄 迭代次数计算原理
+### 🔄 两种训练模式详解
 
+脚本支持两种互斥的训练模式，适应不同用户的工作习惯：
+
+#### ITERATION 模式（基于总迭代次数）
+适合对训练总量有明确迭代数目标的用户。
+
+```bash
+python train_quick.py --total_iterations 50000 --ckpt_name "exp_1"
 ```
-每 epoch 的迭代次数 = ⌈ 数据集大小 / batch_size ⌉
 
-所需 epoch 数 = ⌈ 总迭代次数 / 每 epoch 迭代数 ⌉
+流程：
+1. 统计数据集大小：1000 张图
+2. 计算每 epoch 迭代数：⌈1000 / 2⌉ = 500
+3. 计算所需 epoch 数：⌈50000 / 500⌉ = 100
+4. **实际训练**：100 epoch × 500 iter/epoch = 50000 迭代
 
-实际总迭代次数 = 所需 epoch 数 × 每 epoch 迭代数
+#### EPOCH 模式（基于 epoch 数）
+适合基于过往经验，已知需要训练多少 epoch 的用户。
+
+```bash
+python train_quick.py --epoch 100 --ckpt_name "exp_1"
 ```
 
-例如：
-- 数据集: 1000 张图
-- Batch size: 2
-- 每 epoch 迭代数: ⌈1000 / 2⌉ = 500
-- 目标迭代: 50,000
-- 所需 epoch: ⌈50,000 / 500⌉ = 100
-- 实际迭代: 100 × 500 = 50,000
+流程：
+1. 统计数据集大小：1000 张图
+2. 计算每 epoch 迭代数：⌈1000 / 2⌉ = 500
+3. **直接使用**：100 epoch（用户指定）
+4. **实际训练**：100 epoch × 500 iter/epoch = 50000 迭代
+
+#### 数学关系
+$$\text{每 epoch 的迭代数} = \left\lceil \frac{\text{数据集大小}}{\text{batch\_size}} \right\rceil$$
+
+$$\text{ITERATION 模式：所需 epoch 数} = \left\lceil \frac{\text{总迭代数}}{\text{每 epoch 迭代数}} \right\rceil$$
+
+$$\text{EPOCH 模式：总迭代数} = \text{指定 epoch 数} \times \text{每 epoch 迭代数}$$
+
+---
+
+### 📊 输出示例
+
+**ITERATION 模式输出：**
+```
+👉 每个 epoch 的迭代次数: 500
+   (数据集: 1000 张图 / 批大小: 2)
+
+📊 训练计划 (ITERATION 模式):
+   目标总迭代次数: 50,000
+   所需 epoch 数:  100
+   实际总迭代次数: 50,000 (比目标多 0)
+```
+
+**EPOCH 模式输出：**
+```
+👉 每个 epoch 的迭代次数: 500
+   (数据集: 1000 张图 / 批大小: 2)
+
+📊 训练计划 (EPOCH 模式):
+   指定 epoch 数:   100
+   总迭代次数:      50,000
+```
 
 ### ⚠️ 常见问题
 
@@ -588,10 +629,13 @@ Checkpoints/
 
 | 场景 | 命令 |
 |------|------|
-| 快速测试 | `python train_quick.py --total_iterations 1000 --dry_run` |
-| 标准训练 | `python train_quick.py --total_iterations 50000 --ckpt_name "exp_1"` |
-| 长期训练 | `python train_quick.py --total_iterations 200000 --ckpt_name "long_exp" --ckpt_interval 10000` |
-| 断点续训 | `python train_quick.py --total_iterations 100000 --ckpt_name "exp_1" --resume last_ckpt.pt` |
+| 快速测试（ITERATION） | `python train_quick.py --total_iterations 1000 --dry_run` |
+| 快速测试（EPOCH） | `python train_quick.py --epoch 10 --dry_run` |
+| 标准训练（ITERATION） | `python train_quick.py --total_iterations 50000 --ckpt_name "exp_1"` |
+| 标准训练（EPOCH） | `python train_quick.py --epoch 100 --ckpt_name "exp_1"` |
+| 长期训练（ITERATION） | `python train_quick.py --total_iterations 200000 --ckpt_name "long_exp" --ckpt_interval 10000` |
+| 长期训练（EPOCH） | `python train_quick.py --epoch 500 --ckpt_name "long_exp" --ckpt_interval 10` |
+| 断点续训 | `python train_quick.py --epoch 100 --ckpt_name "exp_1" --resume last_ckpt.pt` |
 
 ---
 

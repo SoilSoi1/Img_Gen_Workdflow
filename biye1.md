@@ -729,6 +729,199 @@ def cal_brisque(image_dir: str) -> float:
 ```
 
 该实现使用 `scipy` 的卷积函数，无需额外的深度学习库，计算速度快。进度条用于监控处理过程。
+---
 
+## DDPM 训练流程优化（3月21日补充）
+
+经过初版实现后，在实际使用中发现了一些可以改进的地方，主要围绕数据处理和训练脚本两个方面进行了优化。
+
+### 改进一：Dataset 模块的简化与灵活化
+
+#### 问题背景
+原始的 `dataset.py` 是为了多任务设计的，包含了：
+- 标签分类逻辑（tight/leak 分类）
+- ViT 多路输出（224×224 RGB 路径）
+- 严格的文件夹结构要求
+
+但在实际图像生成任务中，我们只需要进行**无条件生成**，不需要标签，也不需要多路输出。复杂的设计反而会增加维护成本，并且限制了数据加载的灵活性。
+
+#### 改进方案
+
+**核心改动：**
+
+1. **删除标签逻辑**  
+   移除了 `self.class_to_idx`、`self.idx_to_class` 等分类映射，以及 `get_class_mapping()` 方法。现在数据集只需递归扫描文件夹，获取所有图片即可。
+
+2. **删除 ViT 分支**  
+   移除了 `self.vit_transform`，删除了 224×224 的多路输出。`__getitem__()` 现在只返回单一的处理过的图像。
+
+3. **灵活的文件夹扫描**  
+   改用 `os.walk()` 递归遍历文件夹，不再要求严格的 `tight/leak` 子文件夹结构。用户可以：
+   - 将所有图片放在一个目录下
+   - 使用任意深度的子文件夹
+   - 更容易地添加新数据
+
+4. **兼容性考虑**  
+   尽管简化了数据集，仍然返回三元组 `(img_resnet, None, None)` 以兼容现有的 `Train.py` 代码，这样可以无缝切换而无需修改训练脚本。
+
+**改进前后对比：**
+
+| 特性 | 原始版本 | 改进版本 |
+|------|--------|---------|
+| 代码行数 | ~70 | ~35 |
+| 文件夹结构 | 强制 `tight/leak` | 任意结构 |
+| 标签支持 | ✓ | ✗（不需要） |
+| ViT 分支 | ✓ | ✗（不需要） |
+| 递归扫描 | ✗ | ✓ |
+| 训练脚本兼容性 | ✓ | ✓ |
+
+#### 代码实现
+```python
+class LowTimesDataset(Dataset):
+    def __init__(self, image_dir, transform=None):
+        self.image_dir = image_dir
+        self.transform = transform
+        self.samples = []  
+
+        # 递归遍历所有子文件夹中的图片
+        for root, dirs, files in os.walk(image_dir):
+            for filename in sorted(files):
+                if filename.startswith('.'):
+                    continue
+                img_path = os.path.join(root, filename)
+                if os.path.isfile(img_path):
+                    self.samples.append(img_path)
+
+    def __getitem__(self, idx):
+        img_path = self.samples[idx]
+        image = Image.open(img_path).convert("RGB")
+        img_resnet = self.transform(image) if self.transform else image
+        # 返回三个值以兼容现有的 train 脚本
+        return img_resnet, None, None
+```
+
+#### 优势
+- **代码维护性提升**：代码更简洁，逻辑清晰
+- **使用灵活性提升**：支持任意文件夹结构
+- **学习曲线降低**：新用户不需要理解 ViT、标签等复杂逻辑
+- **向下兼容**：无需修改 `Train.py` 和其他依赖组件
+
+---
+
+### 改进二：快速训练脚本的功能增强
+
+#### 问题背景
+原始的 `train_quick.py` 只支持通过 `--total_iterations` 参数指定训练量。但在实际工作中，有时用户更习惯直接指定 epoch 数（基于过往经验），而不想经过"迭代数 → epoch 数"的转换。
+
+此外，两种模式应该相互排斥，避免用户同时指定两个参数造成混淆。
+
+#### 改进方案
+
+**核心改动：**
+
+1. **添加互斥的两种训练模式**
+   - **ITERATION 模式**（默认）：`--total_iterations N` 指定总迭代次数
+   - **EPOCH 模式**（新增）：`--epoch N` 直接指定 epoch 数
+
+   两个参数通过 `add_mutually_exclusive_group()` 实现互斥，确保用户只能选择其中一种。
+
+2. **智能 epoch 数计算**
+   - ITERATION 模式：根据公式 $\text{required\_epochs} = \lceil \text{total\_iterations} / \text{iterations\_per\_epoch} \rceil$ 计算
+   - EPOCH 模式：直接使用用户指定的 epoch 数，无需计算
+
+3. **不同的输出提示**
+   - ITERATION 模式：显示"目标迭代次数 → 实际需要的 epoch 数 → 实际总迭代次数"
+   - EPOCH 模式：显示"指定 epoch 数 → 总迭代次数"
+
+4. **使用公式的数学基础**
+   根据数据集大小自动计算：
+   $$\text{迭代数/epoch} = \lceil \text{数据集大小} / \text{batch\_size} \rceil$$
+   $$\text{实际总迭代} = \text{所需epoch数} \times \text{迭代数/epoch}$$
+
+#### 代码实现
+```python
+# 命令行参数配置
+train_mode_group = parser.add_mutually_exclusive_group()
+
+train_mode_group.add_argument(
+    "--total_iterations",
+    type=int,
+    default=None,
+    help="总迭代次数 (与 --epoch 二选一，默认模式)"
+)
+
+train_mode_group.add_argument(
+    "--epoch",
+    type=int,
+    dest="use_epoch",
+    help="训练总 epoch 数 (与 --total_iterations 二选一)"
+)
+
+# 配置函数中的逻辑
+if args.use_epoch is not None:
+    # === EPOCH 模式 ===
+    required_epochs = args.use_epoch
+    actual_iterations = required_epochs * iterations_per_epoch
+    print(f"📊 训练计划 (EPOCH 模式):")
+    print(f"   指定 epoch 数:   {required_epochs}")
+    print(f"   总迭代次数:      {actual_iterations:,}")
+else:
+    # === ITERATION 模式 (默认) ===
+    total_iterations = args.total_iterations if args.total_iterations is not None else 50000
+    required_epochs = (total_iterations + iterations_per_epoch - 1) // iterations_per_epoch
+    actual_iterations = required_epochs * iterations_per_epoch
+    print(f"📊 训练计划 (ITERATION 模式):")
+    print(f"   目标总迭代次数: {total_iterations:,}")
+    print(f"   所需 epoch 数:  {required_epochs}")
+    print(f"   实际总迭代次数: {actual_iterations:,}")
+```
+
+#### 使用示例
+
+**ITERATION 模式（基于迭代次数）：**
+```bash
+# 基础使用
+python train_quick.py --total_iterations 50000 --ckpt_name "exp_1"
+
+# 每 5000 迭代保存一次
+python train_quick.py --total_iterations 50000 --ckpt_name "exp_1" --ckpt_interval 5000
+```
+
+**EPOCH 模式（基于 epoch 数）：**
+```bash
+# 直接指定 100 个 epoch
+python train_quick.py --epoch 100 --ckpt_name "exp_1"
+
+# 无需计算，直观明了
+python train_quick.py --epoch 100 --train_root /path/to/data --ckpt_name "my_exp"
+```
+
+#### 实现细节
+
+脚本自动执行以下步骤：
+
+1. **数据集探测**：使用 `count_images_in_dir()` 统计训练数据中的图片数
+2. **迭代数计算**：$\text{iter/epoch} = \lceil \text{img\_count} / \text{batch\_size} \rceil$
+3. **模式判断**：
+   - 若指定了 `--epoch`，直接使用其值
+   - 否则，用 `--total_iterations`（默认 50000）计算所需 epoch 数
+4. **结果输出**：根据选择的模式打印相应的训练计划
+
+#### 优势
+- **两种模式灵活搭配**：适应不同用户的工作习惯
+- **参数互斥避免歧义**：防止用户同时指定两个参数
+- **即时反馈**：清晰地显示实际训练参数
+- **无缝兼容**：与现有的 checkpoint 间隔、断点续训等功能无冲突
+
+---
+
+### 改进总结
+
+这两项改进的目标是：
+- **简化复杂性**：删除不必要的功能，专注于核心任务
+- **增加灵活性**：支持多种使用场景和用户习惯
+- **保持兼容性**：无需修改其他模块即可升级
+
+这些改进体现了从"一开始设计过度复杂"向"按需迭代优化"的演进过程，也是实际工程中常见的重构模式。
 ---[^1]:又称离散时间马尔可夫链，该过程要求具备“无记忆”性质：下一状态的概率分布只能由当前状态决定，在时间序列中它前面的事件均与之无关
 [^2]:$$
