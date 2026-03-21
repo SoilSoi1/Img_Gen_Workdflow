@@ -115,7 +115,7 @@ def train(modelConfig: Dict):
 
     # model setup
     net_model = UNet(T=modelConfig["T"], ch=modelConfig["channel"], ch_mult=modelConfig["channel_mult"], attn=modelConfig["attn"],
-                     num_res_blocks=modelConfig["num_res_blocks"], dropout=modelConfig["dropout"]).to(device)
+                     num_res_blocks=modelConfig["num_res_blocks"], dropout=modelConfig["dropout"], input_channel=modelConfig["input_channel"]).to(device)
     if modelConfig["training_load_weight"] is not None:
         net_model.load_state_dict(torch.load(os.path.join(
             modelConfig["save_weight_dir"], modelConfig["training_load_weight"]), map_location=device))
@@ -133,7 +133,7 @@ def train(modelConfig: Dict):
         epoch_loss = 0.0
         with tqdm(dataloader, dynamic_ncols=True) as tqdmDataLoader:
             # LowTimesDataset 返回 (img_resnet, img_vit, label)
-            for img_resnet, img_vit, labels in tqdmDataLoader:
+            for img_resnet in tqdmDataLoader:
                  # train
                 optimizer.zero_grad()
                 # 仅使用 ResNet 通路的图像作为输入
