@@ -367,6 +367,234 @@ modelConfig["img_size"] = 256
 
 ---
 
+## ⚡ 快速训练脚本 (train_quick.py)
+
+### 📌 概述
+
+`train_quick.py` 是一个便捷的训练脚本，让你通过 **迭代次数** 而不是 epoch 来定义训练量。脚本会自动根据数据集大小计算所需的 epoch 数。
+
+### 🎯 核心特性
+
+1. **基于迭代次数的训练量定义** - 指定总迭代次数，脚本自动计算所需 epoch 数
+2. **灵活的 Checkpoints 管理** - 自定义文件夹名称 + 自动时间戳 + 灵活保存间隔
+3. **优雅的训练日志** - JSON 格式，记录每 epoch 的 loss、学习率、迭代数、时间戳
+4. **断点续训支持** - 轻松从中断位置恢复训练
+5. **干运行模式** - `--dry_run` 仅检查配置不训练
+
+### 🚀 快速开始
+
+#### 最简单的使用（默认参数）
+```bash
+python train_quick.py --total_iterations 50000
+```
+
+这会自动：
+- 读取 `./newest_data/train/` 中的数据
+- 计算每 epoch 的迭代次数（数据量 / batch_size）
+- 计算所需 epoch 数
+- 在 `./Checkpoints/{timestamp}/` 下保存权重和日志
+
+#### 自定义 Checkpoints 名称
+```bash
+python train_quick.py --total_iterations 50000 --ckpt_name "exp_1"
+```
+会创建：`./Checkpoints/exp_1/{timestamp}/`
+
+#### 设置保存间隔
+```bash
+python train_quick.py \
+  --total_iterations 50000 \
+  --ckpt_name "exp_1" \
+  --ckpt_interval 5000
+```
+- 每 5,000 次迭代保存一次权重
+- 脚本自动转换为 epoch 间隔
+
+#### 自定义数据路径
+```bash
+python train_quick.py \
+  --total_iterations 50000 \
+  --train_root /path/to/training/data \
+  --val_root /path/to/validation/data \
+  --ckpt_name "custom_exp"
+```
+
+#### 断点续训
+```bash
+python train_quick.py \
+  --total_iterations 100000 \
+  --ckpt_name "exp_1" \
+  --resume last_ckpt.pt
+```
+
+#### 仅检查配置（不训练）
+```bash
+python train_quick.py \
+  --total_iterations 50000 \
+  --train_root /path/to/data \
+  --dry_run  # 只打印配置，不开始训练
+```
+
+### 📊 输出示例
+```
+======================================================================
+🚀 DDPM 快速训练脚本
+======================================================================
+✓ 训练数据: ./newest_data/train/
+✓ 验证数据: ./newest_data/val/
+👉 每个 epoch 的迭代次数: 500
+   (数据集: 1000 张图 / 批大小: 2)
+
+📊 迭代计划:
+   目标总迭代次数: 50,000
+   所需 epoch 数:  100
+   实际总迭代次数: 50,000 (比目标多 0)
+
+💾 Checkpoints 保存位置: ./Checkpoints/exp_1/20260321_143022
+
+💾 检查点保存间隔:
+   每 5,000 迭代保存一次
+   ≈ 每 10 epoch 保存一次
+
+⚙️  训练参数:
+   学习率: 0.00002
+   总 batch: 2
+   T (扩散步数): 400
+   设备: cuda:0
+
+📋 配置摘要:
+   状态: train
+   总 epoch 数: 100
+   日志将保存到: ./Checkpoints/exp_1/20260321_143022/training_log_*.json
+
+⏱️  开始训练...
+```
+
+### 📝 命令行参数完整列表
+
+#### 迭代次数相关
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `--total_iterations` | int | 50000 | 总迭代次数 |
+| `--batch_size` | int | 2 | 批大小 |
+
+#### 数据集路径
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `--train_root` | str | `./newest_data/train/` | 训练数据目录 |
+| `--val_root` | str | `./newest_data/val/` | 验证数据目录 |
+
+#### Checkpoints 配置
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `--ckpt_root` | str | `./Checkpoints/` | Checkpoints 根目录 |
+| `--ckpt_name` | str | None | 自定义文件夹名称（可选） |
+| `--ckpt_interval` | int | 10000 | 保存间隔（迭代数，0=仅保存最后的） |
+
+#### 其他参数
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `--resume` | str | None | 指定断点续训的权重文件 |
+| `--dry_run` | bool | False | 仅检查配置，不训练 |
+
+### 📂 文件结构
+
+训练后的输出结构：
+```
+Checkpoints/
+└── exp_1/
+    └── 20260321_143022/                    # 自动时间戳
+        ├── training_log_20260321_143022.json   # JSON 日志
+        ├── last_ckpt.pt                    # 最新权重
+        ├── ckpt_10_epoch.pt                # 版本化权重
+        └── ...
+```
+
+### 📋 训练日志格式 (JSON)
+
+```json
+{
+  "start_time": "2026-03-21T14:30:22.123456",
+  "config": {
+    "lr": 0.00002,
+    "batch_size": 2,
+    "T": 400,
+    "train_root": "./newest_data/train/"
+  },
+  "history": [
+    {
+      "epoch": 0,
+      "loss": 0.054321,
+      "lr": 4e-6,
+      "iterations_in_epoch": 500,
+      "timestamp": "2026-03-21T14:30:45.654321"
+    },
+    {
+      "epoch": 1,
+      "loss": 0.043210,
+      "lr": 8e-6,
+      "iterations_in_epoch": 500,
+      "timestamp": "2026-03-21T14:31:30.123456"
+    }
+  ],
+  "last_epoch": 1,
+  "last_update_time": "2026-03-21T14:31:30.123456"
+}
+```
+
+### 🔄 迭代次数计算原理
+
+```
+每 epoch 的迭代次数 = ⌈ 数据集大小 / batch_size ⌉
+
+所需 epoch 数 = ⌈ 总迭代次数 / 每 epoch 迭代数 ⌉
+
+实际总迭代次数 = 所需 epoch 数 × 每 epoch 迭代数
+```
+
+例如：
+- 数据集: 1000 张图
+- Batch size: 2
+- 每 epoch 迭代数: ⌈1000 / 2⌉ = 500
+- 目标迭代: 50,000
+- 所需 epoch: ⌈50,000 / 500⌉ = 100
+- 实际迭代: 100 × 500 = 50,000
+
+### ⚠️ 常见问题
+
+**Q1: 如何知道数据集的大小？**  
+脚本会自动计算。运行时会打印：
+```
+👉 每个 epoch 的迭代次数: 500
+   (数据集: 1000 张图 / 批大小: 2)
+```
+
+**Q2: Checkpoints 如何命名？**  
+- 指定 `--ckpt_name "exp_1"`：`./Checkpoints/exp_1/{timestamp}/`
+- 不指定：`./Checkpoints/{timestamp}/`
+
+时间戳格式：`YYYYMMDD_HHMMSS`
+
+**Q3: 可以改变保存间隔吗？**  
+用 `--ckpt_interval` 指定迭代数，脚本自动转换为 epoch 间隔。
+例如 `--ckpt_interval 5000` 表示每 5,000 次迭代保存一次。
+
+**Q4: 日志文件在哪里？**  
+在 checkpoints 目录下，文件名：`training_log_{timestamp}.json`
+
+例如：`./Checkpoints/exp_1/20260321_143022/training_log_20260321_143022.json`
+
+### 💡 快速参考
+
+| 场景 | 命令 |
+|------|------|
+| 快速测试 | `python train_quick.py --total_iterations 1000 --dry_run` |
+| 标准训练 | `python train_quick.py --total_iterations 50000 --ckpt_name "exp_1"` |
+| 长期训练 | `python train_quick.py --total_iterations 200000 --ckpt_name "long_exp" --ckpt_interval 10000` |
+| 断点续训 | `python train_quick.py --total_iterations 100000 --ckpt_name "exp_1" --resume last_ckpt.pt` |
+
+---
+
 ## 📊 模型架构详解
 
 ```

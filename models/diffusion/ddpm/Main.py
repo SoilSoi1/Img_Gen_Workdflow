@@ -1,7 +1,7 @@
 from Train import train, eval
 
 modelConfig = {
-    "state": "eval", # or eval
+    "state": "eval", # "train" or "eval"
     "epoch": 2000,
     "batch_size": 2,
     "T": 400,
@@ -17,14 +17,21 @@ modelConfig = {
     "img_size": 512,
     "grad_clip": 1.,
     "device": "cuda:0", ### MAKE SURE YOU HAVE A GPU !!!
+    # Dataset paths
+    "train_root": "./newest_data/train/",
+    "val_root": "./newest_data/val/",
+    "num_workers": 4,
+    "pin_memory": True,
+    # Training & Checkpoints
     "training_load_weight": "last_ckpt.pt",
     "save_weight_dir": "./Checkpoints/",
     "test_load_weight": "last_ckpt.pt",
+    # Sampling & Inference
     "sampled_dir": "./SampledImgs/",
     "sampledNoisyImgName": "NoisyNoGuidenceImgs.png",
     "sampledImgName": "SampledNoGuidenceImgs.png",
     "nrow": 8,
-    "input_channel":3
+    "input_channel": 3
     }
 def main(model_config = None):
     if model_config is not None:

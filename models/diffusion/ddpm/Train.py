@@ -1,5 +1,7 @@
 import os
 from typing import Dict
+from datetime import datetime
+import json
 
 import torch
 import torch.optim as optim
@@ -12,27 +14,72 @@ from torchvision.utils import save_image
 from Diffusion import GaussianDiffusionSampler, GaussianDiffusionTrainer
 from Model import UNet
 from Scheduler import GradualWarmupScheduler
-from dataset import get_dataloader  # 新增：使用自定义数据集加载器
+from dataset import get_dataloader
 
-def epoch_file(number, filename="output.txt"):
-    # 确保输入是一个整数
-    if not isinstance(number, int):
-        # 尝试将其转换为整数，如果失败则抛出错误
-        try:
-            number = int(number)
-        except ValueError:
-            print(f"错误: 输入 '{number}' 无法转换为整数。")
-            return
 
-    # 使用 'a' 模式打开文件，表示追加 (append)。
-    # 如果文件不存在，'a' 模式会自动创建文件。
+def create_training_log_file(save_dir, initial_info=None):
+    """
+    创建一个带有时间戳和训练信息的日志文件
+    
+    参数:
+        save_dir (str): 日志保存目录
+        initial_info (dict): 初始信息（如模型配置）
+    
+    返回:
+        str: 日志文件路径
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # 创建带时间戳的日志文件名
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = os.path.join(save_dir, f"training_log_{timestamp}.json")
+    
+    # 初始化日志数据结构
+    log_data = {
+        "start_time": datetime.now().isoformat(),
+        "config": initial_info or {},
+        "history": []  # 存储 epoch 级别的信息
+    }
+    
+    # 写入初始日志
+    with open(log_file, 'w') as f:
+        json.dump(log_data, f, indent=2)
+    
+    return log_file
+
+
+def log_epoch_info(log_file, epoch, loss, lr, iterations_in_epoch=1):
+    """
+    记录每个 epoch 的信息到 JSON 日志文件
+    
+    参数:
+        log_file (str): 日志文件路径
+        epoch (int): epoch 号
+        loss (float): 该 epoch 的平均损失
+        lr (float): 当前学习率
+        iterations_in_epoch (int): 该 epoch 的迭代次数（关键指标！）
+    """
     try:
-        with open(filename, 'a') as file:
-            # 将整数转换为字符串，并添加换行符 '\n'，实现逐行保存
-            file.write(str(number) + '\n')
-        print(f"成功将整数 {number} 保存到文件 '{filename}' 中。")
+        with open(log_file, 'r') as f:
+            log_data = json.load(f)
+        
+        # 添加当前 epoch 的信息
+        epoch_info = {
+            "epoch": epoch,
+            "loss": round(float(loss), 6),
+            "lr": float(lr),
+            "iterations_in_epoch": iterations_in_epoch,
+            "timestamp": datetime.now().isoformat()
+        }
+        log_data["history"].append(epoch_info)
+        log_data["last_epoch"] = epoch
+        log_data["last_update_time"] = datetime.now().isoformat()
+        
+        # 更新日志文件
+        with open(log_file, 'w') as f:
+            json.dump(log_data, f, indent=2)
     except Exception as e:
-        print(f"写入文件时发生错误: {e}")
+        print(f"警告: 写入日志文件失败 {e}，将继续训练")
 
 def train(modelConfig: Dict):
     device = torch.device(modelConfig["device"])
@@ -40,12 +87,31 @@ def train(modelConfig: Dict):
     # 使用自定义数据集（只取 ResNet 通路的图像）
     # get_dataloader 返回 (train_loader, val_loader)，这里只取 train_loader
     dataloader, _ = get_dataloader(
-        train_root="./newest_data/train/",
-        val_root="./newest_data/val/",  # 若有单独 val 目录可改为 val 路径
+        train_root=modelConfig.get("train_root", "./newest_data/train/"),
+        val_root=modelConfig.get("val_root", "./newest_data/val/"),
         batch_size=modelConfig["batch_size"],
-        num_workers=4,
-        pin_memory=True
+        num_workers=modelConfig.get("num_workers", 4),
+        pin_memory=modelConfig.get("pin_memory", True)
     )
+    
+    # 创建或获取日志文件
+    log_file = modelConfig.get("log_file", None)
+    if log_file is None:
+        log_file = create_training_log_file(
+            modelConfig["save_weight_dir"],
+            initial_info={
+                "lr": modelConfig["lr"],
+                "batch_size": modelConfig["batch_size"],
+                "T": modelConfig["T"],
+                "train_root": modelConfig.get("train_root", "./newest_data/train/")
+            }
+        )
+        modelConfig["log_file"] = log_file
+    
+    print(f"日志文件: {log_file}")
+    
+    # 计算每个 epoch 的迭代次数
+    iterations_per_epoch = len(dataloader)
 
     # model setup
     net_model = UNet(T=modelConfig["T"], ch=modelConfig["channel"], ch_mult=modelConfig["channel_mult"], attn=modelConfig["attn"],
@@ -64,6 +130,7 @@ def train(modelConfig: Dict):
 
     # start training
     for e in range(modelConfig["epoch"]):
+        epoch_loss = 0.0
         with tqdm(dataloader, dynamic_ncols=True) as tqdmDataLoader:
             # LowTimesDataset 返回 (img_resnet, img_vit, label)
             for img_resnet, img_vit, labels in tqdmDataLoader:
@@ -76,6 +143,7 @@ def train(modelConfig: Dict):
                 torch.nn.utils.clip_grad_norm_(
                     net_model.parameters(), modelConfig["grad_clip"])
                 optimizer.step()
+                epoch_loss += loss.item()
                 tqdmDataLoader.set_postfix(ordered_dict={
                     "epoch": e,
                     "loss: ": loss.item(),
@@ -84,12 +152,21 @@ def train(modelConfig: Dict):
                 })
         warmUpScheduler.step()
         
+        # 计算该 epoch 的平均损失
+        avg_loss = epoch_loss / len(dataloader) if len(dataloader) > 0 else 0
+        current_lr = optimizer.state_dict()['param_groups'][0]["lr"]
+        
+        # 记录到日志文件
+        try:
+            log_epoch_info(log_file, e, avg_loss, current_lr, iterations_per_epoch)
+        except Exception as log_err:
+            print(f"警告: 日志记录失败 - {log_err}")
+        
         torch.save(net_model.state_dict(), os.path.join(
             modelConfig["save_weight_dir"], 'last_ckpt.pt'))
         if e % 500 == 0 and e != 0:
             torch.save(net_model.state_dict(), os.path.join(
                 modelConfig["save_weight_dir"], f'ckpt_{e}epoch.pt'))
-        epoch_file(e, f'{modelConfig["save_weight_dir"]}/output.txt')
 
 
 def eval(modelConfig: Dict):
