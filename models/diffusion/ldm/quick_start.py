@@ -93,10 +93,11 @@ models/diffusion/ldm/
 ├── dataset.py            # 数据加载模块（UnconditionalImageDataset）
 ├── train.py              # 训练脚本（LDMTrainer）
 ├── infer.py              # 推理脚本（LDMInference）
+├── util.py               # 工具函数与扩散工具库
+├── ddim.py               # DDIM 快速采样器
+├── configs/              # 模型配置（YAML）
 ├── README.md             # 详细文档
-├── quick_start.py        # 本文件（快速参考）
-└── <temp>/
-    └── latent-diffusion/ # 官方 LDM 实现（克隆的）
+└── quick_start.py        # 本文件（快速参考）
 
 输出结构：
 experiments/ldm/

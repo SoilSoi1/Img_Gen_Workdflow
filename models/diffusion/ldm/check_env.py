@@ -41,26 +41,18 @@ def check_pytorch():
         return False
 
 def check_ldm_repo():
-    """检查 LDM 官方仓库"""
-    print("[Check] LDM 官方仓库...", end=" ")
+    """检查 LDM 本地模块可用性"""
+    print("[Check] LDM 本地模块...", end=" ")
     
-    ldm_path = Path(__file__).parent.parent.parent / "temp" / "latent-diffusion"
+    ldm_path = Path(__file__).parent
     
-    if ldm_path.exists():
-        # Try to import
-        sys.path.insert(0, str(ldm_path))
-        try:
-            from ldm.util import instantiate_from_config
-            from ldm.models.diffusion.ddpm import LatentDiffusion
-            print(f"✓ 位于 {ldm_path}")
-            return True
-        except ImportError as e:
-            print(f"✗ 无法导入: {e}")
-            return False
-    else:
-        print(f"✗ 不存在: {ldm_path}")
-        print("\n  需要克隆官方仓库：")
-        print(f"  git clone https://github.com/CompVis/latent-diffusion.git {ldm_path}")
+    try:
+        from util import instantiate_from_config
+        from ddim import DDIMSampler
+        print(f"✓ 位于 {ldm_path}")
+        return True
+    except ImportError as e:
+        print(f"✗ 无法导入: {e}")
         return False
 
 def check_required_packages():
@@ -90,15 +82,12 @@ def check_ldm_modules():
     """检查 LDM 内部模块"""
     print("[Check] LDM 内部模块...")
     
-    ldm_path = Path(__file__).parent.parent.parent / "temp" / "latent-diffusion"
-    sys.path.insert(0, str(ldm_path))
-    
     modules = [
-        'ldm.util',
-        'ldm.models.diffusion.ddpm',
-        'ldm.models.autoencoder',
-        'ldm.modules.diffusionmodules.openaimodel',
-        'ldm.data.base',
+        'dataset',
+        'util',
+        'ddim',
+        'train',
+        'infer',
     ]
     
     all_ok = True

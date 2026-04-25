@@ -118,7 +118,7 @@ def train(modelConfig: Dict):
                      num_res_blocks=modelConfig["num_res_blocks"], dropout=modelConfig["dropout"], input_channel=modelConfig["input_channel"]).to(device)
     if modelConfig["training_load_weight"] is not None:
         net_model.load_state_dict(torch.load(os.path.join(
-            modelConfig["save_weight_dir"], modelConfig["training_load_weight"]), map_location=device))
+            "Checkpoints/", modelConfig["training_load_weight"]), map_location=device))
     optimizer = torch.optim.AdamW(
         net_model.parameters(), lr=modelConfig["lr"], weight_decay=1e-4)
     cosineScheduler = optim.lr_scheduler.CosineAnnealingLR(

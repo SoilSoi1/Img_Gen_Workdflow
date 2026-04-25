@@ -16,6 +16,7 @@ import math
 import argparse
 from pathlib import Path
 from datetime import datetime
+from copy import deepcopy
 
 import torch
 import torch.nn as nn
@@ -29,166 +30,42 @@ from util import instantiate_from_config
 from omegaconf import OmegaConf
 
 from dataset import UnconditionalImageDataset
+from model import SimplifiedLDMWrapper
 
 
-class SimplifiedLDMWrapper(nn.Module):
-    """Simplified LDM wrapper that doesn't depend on official code."""
+class EMA:
+    """Exponential Moving Average for model parameters."""
     
-    def __init__(self, model_config, device):
-        super().__init__()
-        self.device = device
-        self.model_config = model_config
-        
-        # Store diffusion parameters from config
-        self.linear_start = model_config.params.linear_start
-        self.linear_end = model_config.params.linear_end
-        self.num_timesteps = model_config.params.timesteps
-        
-        # Create a simple UNet-like denoiser (without canonical openai implementation)
-        # This avoids importing from official LDM which has pytorch_lightning deps
-        in_channels = model_config.params.unet_config.params.in_channels
-        model_channels = model_config.params.unet_config.params.model_channels
-        out_channels = model_config.params.unet_config.params.out_channels
-        num_heads = model_config.params.unet_config.params.num_head_channels
-        
-        self.unet = SimpleUNet(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            model_channels=model_channels,
-            num_heads=num_heads
-        )
-        
-        # Create noise schedule
-        self._setup_noise_schedule()
+    def __init__(self, model, decay=0.9999):
+        self.decay = decay
+        self.shadow = {}
+        self.backup = {}
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                self.shadow[name] = param.data.clone()
     
-    def _setup_noise_schedule(self):
-        """Setup linear noise schedule for DDPM."""
-        betas = torch.linspace(self.linear_start, self.linear_end, self.num_timesteps)
-        alphas = 1.0 - betas
-        alphas_cumprod = torch.cumprod(alphas, dim=0)
-        
-        self.register_buffer('betas', betas)
-        self.register_buffer('alphas', alphas)
-        self.register_buffer('alphas_cumprod', alphas_cumprod)
+    def update(self, model):
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                self.shadow[name] = self.decay * self.shadow[name] + (1 - self.decay) * param.data
     
-    def forward(self, x):
-        """Forward pass: add noise and denoise."""
-        # For simplicity, we skip VAE encoding and work in image space
-        # In practice, you'd want proper VAE encoding
-        z = x
-        
-        # Sample random timestep
-        t = torch.randint(0, self.num_timesteps, (x.shape[0],)).to(self.device)
-        
-        # Sample noise
-        noise = torch.randn_like(z)
-        
-        # Add noise to latent (forward diffusion process)
-        sqrt_alphas_cumprod = torch.sqrt(self.alphas_cumprod[t])
-        sqrt_one_minus_alphas_cumprod = torch.sqrt(1.0 - self.alphas_cumprod[t])
-        
-        # Reshape for broadcasting over batch
-        shape = [x.shape[0], 1, 1, 1]
-        sqrt_alphas_cumprod = sqrt_alphas_cumprod.view(*shape)
-        sqrt_one_minus_alphas_cumprod = sqrt_one_minus_alphas_cumprod.view(*shape)
-        
-        z_t = sqrt_alphas_cumprod * z + sqrt_one_minus_alphas_cumprod * noise
-        
-        # Predict noise using UNet
-        pred_noise = self.unet(z_t, t)
-        
-        # MSE loss
-        loss = nn.functional.mse_loss(pred_noise, noise, reduction='mean')
-        
-        return loss
-
-
-class SimpleUNet(nn.Module):
-    """Simple UNet-like architecture for diffusion denoising."""
+    def apply_shadow(self, model):
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                self.backup[name] = param.data
+                param.data = self.shadow[name]
     
-    def __init__(self, in_channels=3, out_channels=3, model_channels=128, num_heads=32):
-        super().__init__()
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.model_channels = model_channels
-        
-        # Time embedding
-        self.time_embed = nn.Sequential(
-            nn.Linear(1, model_channels),
-            nn.SiLU(),
-            nn.Linear(model_channels, model_channels),
-        )
-        
-        # Encoder
-        self.enc1 = self._make_block(in_channels, model_channels)
-        self.down1 = nn.MaxPool2d(2)
-        
-        self.enc2 = self._make_block(model_channels, model_channels * 2)
-        self.down2 = nn.MaxPool2d(2)
-        
-        # Bottleneck  
-        self.bottleneck = self._make_block(model_channels * 2, model_channels * 4)
-        
-        # Decoder
-        self.up1 = nn.Upsample(scale_factor=2)
-        self.dec1 = self._make_block(model_channels * 4 + model_channels * 2, model_channels * 2)
-        
-        self.up2 = nn.Upsample(scale_factor=2)
-        self.dec2 = self._make_block(model_channels * 2 + model_channels, model_channels)
-        
-        # Output
-        self.final = nn.Sequential(
-            nn.GroupNorm(32, model_channels),
-            nn.SiLU(),
-            nn.Conv2d(model_channels, out_channels, 3, padding=1)
-        )
+    def restore(self, model):
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                param.data = self.backup[name]
+        self.backup = {}
     
-    def _make_block(self, in_ch, out_ch):
-        return nn.Sequential(
-            nn.Conv2d(in_ch, out_ch, 3, padding=1),
-            nn.GroupNorm(32, out_ch),
-            nn.SiLU(),
-            nn.Conv2d(out_ch, out_ch, 3, padding=1),
-        )
+    def state_dict(self):
+        return deepcopy(self.shadow)
     
-    def forward(self, x, t):
-        # Time embedding
-        t_emb = self._get_timestep_embedding(t, self.model_channels)
-        
-        # Encoder
-        e1 = self.enc1(x)
-        x = self.down1(e1)
-        
-        e2 = self.enc2(x)
-        x = self.down2(e2)
-        
-        # Bottleneck
-        x = self.bottleneck(x)
-        
-        # Decoder
-        x = self.up1(x)
-        x = torch.cat([x, e2], dim=1)
-        x = self.dec1(x)
-        
-        x = self.up2(x)
-        x = torch.cat([x, e1], dim=1)
-        x = self.dec2(x)
-        
-        x = self.final(x)
-        
-        return x
-    
-    def _get_timestep_embedding(self, t, embedding_dim):
-        """Get sinusoidal timestep embeddings."""
-        # Sinusoidal position encoding
-        device = t.device
-        half_dim = embedding_dim // 2
-        emb = torch.arange(half_dim, device=device, dtype=torch.float32)
-        emb = math.exp(-math.log(10000.0) / (half_dim - 1)) * emb
-        emb = t.float()[:, None] * emb[None, :]
-        emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=1)
-        return emb
-
+    def load_state_dict(self, state_dict):
+        self.shadow = state_dict
 
 
 class LDMTrainer:
@@ -218,6 +95,9 @@ class LDMTrainer:
         
         # Optimizer
         self._setup_optimizer()
+        
+        # EMA
+        self.ema = EMA(self.model, decay=0.9999)
         
         # Training state
         self.current_epoch = 0
@@ -268,14 +148,11 @@ class LDMTrainer:
         """Setup LDM model and autoencoder."""
         print("[Model] Loading Latent Diffusion Model...")
         
-        # Add LDM to path so ldm modules can be imported
-        ldm_root = Path(__file__).parent.parent.parent.parent / "temp" / "latent-diffusion"
-        if str(ldm_root) not in sys.path:
-            sys.path.insert(0, str(ldm_root))
-            print(f"[Model] Added to path: {ldm_root}")
+        # Load config from local configs directory
+        ldm_root = Path(__file__).parent
         
         # Load config
-        config_path = ldm_root / "configs/latent-diffusion/celebahq-ldm-vq-4.yaml"
+        config_path = ldm_root / "configs" / "latent-diffusion" / "celebahq-ldm-vq-4.yaml"
         if not config_path.exists():
             raise FileNotFoundError(f"Config not found: {config_path}")
         
@@ -285,10 +162,13 @@ class LDMTrainer:
         # Override with user config
         config.model.params.image_size = self.config['image_size']
         config.model.params.channels = self.config.get('channels', 3)
-        config.data.params.batch_size = self.config['batch_size']
+        # UNet now operates on latent space (4 channels instead of 3)
+        config.model.params.unet_config.params.in_channels = 4
+        config.model.params.unet_config.params.out_channels = 4
         
-        # Create simplified LDM wrapper that avoids pytorch_lightning dependencies
-        self.model = SimplifiedLDMWrapper(config.model, self.device)
+        # Create full LDM wrapper with VAE + UNet
+        self.model = SimplifiedLDMWrapper(config.model, self.device, image_size=self.config['image_size'])
+        self.model = self.model.to(self.device)
         
         # Count parameters
         n_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
@@ -299,7 +179,7 @@ class LDMTrainer:
     def _setup_optimizer(self):
         """Setup optimizer and LR scheduler."""
         # Use base learning rate from config
-        base_lr = self.config.get('base_lr', 2.0e-06)
+        base_lr = self.config.get('base_lr', 1.0e-05)
         
         # Scale learning rate by batch size (common practice)
         if self.config.get('scale_lr', True):
@@ -352,9 +232,17 @@ class LDMTrainer:
             msg += f" lr={lr:.2e}"
             print(msg)
             
-            # Save checkpoint
+            # Save checkpoint at interval
             if (epoch + 1) % self.config['ckpt_interval'] == 0:
                 self._save_checkpoint(epoch)
+            
+            # Save best model (using EMA weights)
+            if train_loss < self.best_loss:
+                self.best_loss = train_loss
+                self._save_checkpoint(epoch, filename='best.pt', use_ema=True)
+            
+            # Always save last.pt for resume
+            self._save_checkpoint(epoch, filename='last.pt')
             
             # LR scheduler step
             self.scheduler.step()
@@ -386,6 +274,9 @@ class LDMTrainer:
             
             self.optimizer.step()
             
+            # Update EMA
+            self.ema.update(self.model)
+            
             total_loss += loss.item()
             self.global_step += 1
             
@@ -409,18 +300,31 @@ class LDMTrainer:
         
         return total_loss / len(self.val_loader)
     
-    def _save_checkpoint(self, epoch):
+    def _save_checkpoint(self, epoch, filename=None, use_ema=False):
         """Save model checkpoint."""
-        ckpt_path = self.ckpt_dir / f"epoch_{epoch+1:05d}.pt"
+        if filename is None:
+            ckpt_path = self.ckpt_dir / f"epoch_{epoch+1:05d}.pt"
+        else:
+            ckpt_path = self.ckpt_dir / filename
         
-        torch.save({
+        # Optionally use EMA weights for inference-quality checkpoints
+        if use_ema:
+            self.ema.apply_shadow(self.model)
+        
+        state = {
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict(),
             'global_step': self.global_step,
-        }, ckpt_path)
+            'image_size': self.config['image_size'],
+            'ema_shadow': self.ema.state_dict(),
+        }
         
+        if use_ema:
+            self.ema.restore(self.model)
+        
+        torch.save(state, ckpt_path)
         print(f"[Checkpoint] Saved to {ckpt_path}")
     
     def resume_from_checkpoint(self, ckpt_path):
@@ -438,6 +342,10 @@ class LDMTrainer:
         self.current_epoch = ckpt['epoch'] + 1
         self.global_step = ckpt['global_step']
         
+        if 'ema_shadow' in ckpt:
+            self.ema.load_state_dict(ckpt['ema_shadow'])
+            print("[Resume] EMA state loaded")
+        
         print(f"[Resume] Loaded from {ckpt_path}")
         print(f"[Resume] Resuming from epoch {self.current_epoch}")
 
@@ -448,20 +356,20 @@ def get_default_config():
         # Data
         'train_root': './datasets/color_20260321/train',
         'val_root': None,
-        'image_size': 256,
+        'image_size': 512,
         'channels': 3,
         
         # Training
         'epochs': 100,
         'batch_size': 4,
         'num_workers': 4,
-        'base_lr': 2.0e-06,
+        'base_lr': 1.0e-05,
         'scale_lr': True,
         'grad_clip': 1.0,
         
         # Saving
         'save_dir': './experiments/ldm/exp_1',
-        'ckpt_interval': 10,
+        'ckpt_interval': 100,
         'log_interval': 100,
         
         # Device
@@ -475,20 +383,20 @@ def main():
     # Data
     parser.add_argument('--train_root', type=str, default=None, help='Training data root')
     parser.add_argument('--val_root', type=str, default=None, help='Validation data root')
-    parser.add_argument('--image_size', type=int, default=256, help='Image size')
+    parser.add_argument('--image_size', type=int, default=512, help='Image size')
     parser.add_argument('--channels', type=int, default=3, help='Image channels')
     
     # Training
     parser.add_argument('--epochs', type=int, default=100, help='Number of epochs')
     parser.add_argument('--batch_size', type=int, default=4, help='Batch size')
     parser.add_argument('--num_workers', type=int, default=4, help='Number of workers')
-    parser.add_argument('--base_lr', type=float, default=2.0e-06, help='Base learning rate')
+    parser.add_argument('--base_lr', type=float, default=1.0e-05, help='Base learning rate')
     parser.add_argument('--scale_lr', action='store_true', help='Scale LR by batch size')
     parser.add_argument('--grad_clip', type=float, default=1.0, help='Gradient clipping')
     
     # Saving
     parser.add_argument('--save_dir', type=str, default=None, help='Save directory')
-    parser.add_argument('--ckpt_interval', type=int, default=10, help='Checkpoint save interval')
+    parser.add_argument('--ckpt_interval', type=int, default=100, help='Checkpoint save interval')
     parser.add_argument('--log_interval', type=int, default=100, help='Log interval')
     parser.add_argument('--resume', type=str, default=None, help='Resume from checkpoint')
     

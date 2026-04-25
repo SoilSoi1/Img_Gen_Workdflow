@@ -8,7 +8,6 @@ Usage:
 """
 
 import os
-import sys
 import argparse
 from pathlib import Path
 
@@ -19,9 +18,9 @@ import numpy as np
 import warnings
 warnings.filterwarnings('ignore')
 
-from util import instantiate_from_config
-from models.diffusion.ddim import DDIMSampler
+from ddim import DDIMSampler
 from omegaconf import OmegaConf
+from model import SimplifiedLDMWrapper
 
 
 class LDMInference:
@@ -52,32 +51,27 @@ class LDMInference:
         """Load model from checkpoint."""
         print(f"[Model] Loading from {ckpt_path}")
         
-        # Load LDM config - try multiple locations
-        possible_paths = [
-            Path(__file__).parent.parent.parent.parent / "temp" / "latent-diffusion" / "configs/latent-diffusion/celebahq-ldm-vq-4.yaml",
-            Path(__file__).parent / "config.yaml",
-            Path(__file__).parent.parent.parent / "configs" / "model" / "diffusion.yaml",
-        ]
+        # Load checkpoint first to get training config
+        ckpt = torch.load(ckpt_path, map_location=self.device)
         
-        config_path = None
-        for path in possible_paths:
-            if path.exists():
-                config_path = path
-                break
+        # Get image size from checkpoint if available
+        if isinstance(ckpt, dict) and 'image_size' in ckpt:
+            self.image_size = ckpt['image_size']
+        else:
+            self.image_size = 512
         
-        if config_path is None:
-            raise FileNotFoundError(f"Config not found in any of: {possible_paths}")
+        # Load LDM config
+        config_path = Path(__file__).parent / "configs" / "latent-diffusion" / "celebahq-ldm-vq-4.yaml"
+        if not config_path.exists():
+            raise FileNotFoundError(f"Config not found: {config_path}")
         
         print(f"[Model] Using config: {config_path}")
         config = OmegaConf.load(config_path)
         
-        # Instantiate model
-        self.model = instantiate_from_config(config.model)
+        # Instantiate model with correct image size
+        self.model = SimplifiedLDMWrapper(config.model, self.device, image_size=self.image_size)
         self.model = self.model.to(self.device)
         self.model.eval()
-        
-        # Load checkpoint
-        ckpt = torch.load(ckpt_path, map_location=self.device)
         
         # Handle different checkpoint formats
         if isinstance(ckpt, dict):
@@ -97,16 +91,10 @@ class LDMInference:
         
         print(f"[Model] Loaded successfully")
         
-        # Get image size
-        if hasattr(self.model, 'image_size'):
-            self.image_size = self.model.image_size
-        else:
-            self.image_size = 256
-        
         print(f"[Model] Image size: {self.image_size}")
     
     @torch.no_grad()
-    def sample(self, num_samples=4, eta=0.0, seed=None, guidance_scale=1.0):
+    def sample(self, num_samples=4, eta=0.0, temperature=1.0, seed=None, guidance_scale=1.0):
         """
         Sample images from the model.
         
@@ -127,7 +115,8 @@ class LDMInference:
         
         # Sample in latent space
         # For unconditional models, conditioning is None
-        shape = (num_samples, self.model.channels, self.image_size // 8, self.image_size // 8)
+        latent_channels = self.model.first_stage_model.latent_channels
+        shape = (num_samples, latent_channels, self.image_size // 8, self.image_size // 8)
         
         try:
             samples, _ = self.sampler.sample(
@@ -136,6 +125,7 @@ class LDMInference:
                 batch_size=num_samples,
                 shape=shape[1:],
                 eta=eta,
+                temperature=temperature,
                 verbose=True
             )
         except Exception as e:
@@ -161,12 +151,7 @@ class LDMInference:
         """
         print("[Decode] Decoding latents to image space...")
         
-        # Use first_stage_model (VAE) to decode
-        if hasattr(self.model, 'first_stage_model'):
-            images = self.model.first_stage_model.decode(latents)
-        else:
-            print("[Warning] No VAE decoder found, returning latents as-is")
-            images = latents
+        images = self.model.decode_first_stage(latents)
         
         # Denormalize from [-1, 1] to [0, 1]
         images = torch.clamp(images, -1, 1)
@@ -205,6 +190,7 @@ def main():
     parser.add_argument('--num_samples', type=int, default=4, help='Number of samples')
     parser.add_argument('--ddim_steps', type=int, default=50, help='DDIM steps')
     parser.add_argument('--eta', type=float, default=0.0, help='DDIM eta (0=deterministic)')
+    parser.add_argument('--temperature', type=float, default=1.0, help='Sampling temperature')
     parser.add_argument('--seed', type=int, default=None, help='Random seed')
     parser.add_argument('--output_dir', type=str, default=None, help='Output directory')
     parser.add_argument('--device', type=str, default='cuda:0', help='Device')
@@ -213,8 +199,7 @@ def main():
     
     # Auto-generate output directory
     if args.output_dir is None:
-        ckpt_dir = os.path.dirname(args.ckpt)
-        args.output_dir = os.path.join(ckpt_dir or '.', 'generated')
+        args.output_dir = './generated_images'
     
     print("\n" + "="*60)
     print("Latent Diffusion Model (LDM) Inference")
@@ -237,6 +222,7 @@ def main():
         images = infer.sample(
             num_samples=args.num_samples,
             eta=args.eta,
+            temperature=args.temperature,
             seed=args.seed
         )
         

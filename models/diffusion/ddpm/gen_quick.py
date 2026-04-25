@@ -11,10 +11,9 @@ def sampling(num_pic, saved_dir):
 
 if __name__ == '__main__':
     modelConfig["state"] = "eval"
-    num_pic = 100
+    num_pic = 10
     weight = modelConfig["test_load_weight"].split("/")[-1][:-3]
-    os.mkdir(f"./outfig/ddpm/{weight}", exist_ok=True)
-    saved_dir = f"./outfig/ddpm/{weight}"
+    saved_dir = "./"
 
     s_t = time.time()
     sampling(num_pic, saved_dir)

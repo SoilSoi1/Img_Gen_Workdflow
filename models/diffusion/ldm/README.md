@@ -26,14 +26,12 @@ models/diffusion/ldm/
 │   ├── check_env.py    # 环境检查工具
 │   └── quick_start.py  # 快速参考
 │
-├── 📦 官方运算库（已迁移，无需 temp/ 依赖）
-│   ├── util.py         # 官方工具函数 - instantiate_from_config()
-│   ├── models/
-│   │   └── diffusion/
-│   │       └── ddim.py         # 官方 DDIM 快速采样器
-│   └── modules/
-│       └── diffusionmodules/
-│           └── util.py         # 官方扩散工具函数
+├── 📦 运算库（已扁平化，无需 temp/ 依赖）
+│   ├── util.py         # 工具函数 + 扩散工具库
+│   └── ddim.py         # DDIM 快速采样器
+│
+├── 📂 配置
+│   └── configs/        # YAML 模型配置
 │
 └── 📚 文档
     ├── README.md           # 本文件（完整指南）
@@ -44,9 +42,8 @@ models/diffusion/ldm/
 
 | 文件 | 原始来源 | 用途 | 状态 |
 |------|---------|------|------|
-| `util.py` | `temp/latent-diffusion/ldm/util.py` | 配置解析、模型实例化 | ✅ 已迁移 |
-| `models/diffusion/ddim.py` | `temp/latent-diffusion/ldm/models/diffusion/ddim.py` | DDIM 采样算法（快速采样） | ✅ 已迁移 |
-| `modules/diffusionmodules/util.py` | `temp/latent-diffusion/ldm/modules/diffusionmodules/util.py` | 时间步生成、噪声生成 | ✅ 已迁移 |
+| `util.py` | `temp/latent-diffusion/ldm/util.py` + `modules/diffusionmodules/util.py` | 配置解析、模型实例化、扩散工具 | ✅ 已合并迁移 |
+| `ddim.py` | `temp/latent-diffusion/ldm/models/diffusion/ddim.py` | DDIM 采样算法（快速采样） | ✅ 已迁移 |
 
 ---
 

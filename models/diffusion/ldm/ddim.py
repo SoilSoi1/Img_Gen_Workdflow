@@ -1,11 +1,10 @@
 """SAMPLING ONLY."""
-
 import torch
 import numpy as np
 from tqdm import tqdm
 from functools import partial
 
-from ...modules.diffusionmodules.util import make_ddim_sampling_parameters, make_ddim_timesteps, noise_like
+from util import make_ddim_sampling_parameters, make_ddim_timesteps, noise_like
 
 
 class DDIMSampler(object):

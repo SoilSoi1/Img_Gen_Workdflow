@@ -25,7 +25,7 @@ class UnconditionalImageDataset(Dataset):
         extensions (tuple): File extensions to load
     """
     
-    def __init__(self, data_dir, image_size=256, extensions=('.png', '.jpg', '.jpeg')):
+    def __init__(self, data_dir, image_size=512, extensions=('.png', '.jpg', '.jpeg')):
         self.data_dir = Path(data_dir)
         self.image_size = image_size
         self.extensions = tuple(e.lower() for e in extensions)

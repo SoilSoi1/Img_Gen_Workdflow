@@ -193,14 +193,14 @@ def main():
     parser.add_argument(
         "--train_root",
         type=str,
-        default="./newest_data/train/",
+        default="./color_20260321/train/LEAK",
         help="训练数据根目录 (默认: ./newest_data/train/)"
     )
     
     parser.add_argument(
         "--val_root",
         type=str,
-        default="./newest_data/val/",
+        default="./color_20260321/val/LEAK",
         help="验证数据根目录 (默认: ./newest_data/val/)"
     )
     
@@ -252,7 +252,7 @@ def main():
     
     # ========== 断点续训设置 ==========
     if args.resume:
-        modelConfig["training_load_weight"] = args.resume
+        # modelConfig["training_load_weight"] = args.resume
         print(f"\n📂 断点续训: 加载 {args.resume}")
     
     # ========== 配置摘要 ==========
