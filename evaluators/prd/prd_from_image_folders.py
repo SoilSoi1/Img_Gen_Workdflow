@@ -94,6 +94,10 @@ parser.add_argument('--silent', dest='verbose', action='store_false',
 # 选择使用的设备（cuda或cpu）
 parser.add_argument('--device', type=str, default='auto',
                     help='device to use (cuda/cpu/auto). Default: auto')
+# 是否禁用数据量平衡检查（当生成集与真实集数量不同时需要）
+parser.add_argument('--no_enforce_balance', dest='enforce_balance', action='store_false',
+                    help='disable enforcing equal number of points in eval and ref data')
+parser.set_defaults(enforce_balance=True)
 
 # 解析命令行参数
 args = parser.parse_args()
@@ -290,7 +294,8 @@ if __name__ == '__main__':
             ref_data=real_embeddings,
             num_clusters=args.num_clusters,
             num_angles=args.num_angles,
-            num_runs=args.num_runs))
+            num_runs=args.num_runs,
+            enforce_balance=args.enforce_balance))
     
     if args.verbose:
         print(f'\n第四步: 生成结果图表')

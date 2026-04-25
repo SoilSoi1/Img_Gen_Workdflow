@@ -1,12 +1,18 @@
 import os
-import sys
 import numpy as np
 from pathlib import Path
 from PIL import Image
 from tqdm import tqdm
 
-sys.path.insert(0, '/opt/miniconda3/envs/rs1/lib/python3.10/site-packages')
-from brisque.brisque import BRISQUE
+try:
+    from brisque.brisque import BRISQUE
+except ImportError as e:
+    raise ImportError(
+        "缺少 'brisque' 依赖。请安装后再运行:\n"
+        "  pip install brisque\n"
+        "或:\n"
+        "  conda install -c conda-forge brisque"
+    ) from e
 
 
 def cal_brisque_official(image_dir: str) -> float:
