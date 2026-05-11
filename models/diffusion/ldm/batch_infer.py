@@ -13,7 +13,7 @@ def main():
     parser.add_argument('--ckpt', type=str, required=True)
     parser.add_argument('--output_dir', type=str, required=True)
     parser.add_argument('--num_samples', type=int, default=50)
-    parser.add_argument('--batch_size', type=int, default=10)
+    parser.add_argument('--batch_size', type=int, default=4)
     parser.add_argument('--ddim_steps', type=int, default=50)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--device', type=str, default='cuda:0')

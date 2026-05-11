@@ -1,1 +1,32 @@
 temp*
+.ipynb*
+.DS_Store
+__MACOSX/
+
+# Image files
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+*.webp
+
+# PyTorch model checkpoints
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# NumPy arrays
+*.npy
+
+# Log files
+*.log
+
+# Python compiled files
+*.pyc
+__pycache__/
+*events.out.tfevents*
+Checkpoints/test_leak/20260321_193440/training_log_20260321_193440.json
+.gitignore

@@ -236,7 +236,7 @@ class SimpleUNet(nn.Module):
 class SimplifiedLDMWrapper(nn.Module):
     """Full LDM wrapper with pretrained SD VAE + UNet for latent-space diffusion."""
 
-    def __init__(self, model_config, device, image_size=512, vae_path='/root/autodl-tmp/Img_Gen_Workdflow/weights/sd-vae-ft-mse'):
+    def __init__(self, model_config, device, image_size=512, vae_path='/root/autodl-tmp/Img_Gen_Workdflow/weights/sd-vae-ft-mse', model_channels=192):
         super().__init__()
         self.device = device
         self.model_config = model_config
@@ -259,7 +259,8 @@ class SimplifiedLDMWrapper(nn.Module):
         self.scale_factor = self.first_stage_model.config.scaling_factor
 
         # UNet operates in latent space
-        self.unet = SimpleUNet(in_channels=4, out_channels=4, model_channels=192, time_emb_dim=768)
+        time_emb_dim = model_channels * 4
+        self.unet = SimpleUNet(in_channels=4, out_channels=4, model_channels=model_channels, time_emb_dim=time_emb_dim)
 
         self._setup_noise_schedule()
         self.to(device)

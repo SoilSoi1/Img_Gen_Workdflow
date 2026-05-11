@@ -1,14 +1,10 @@
 # 毕业内容一的记录
 ## 前言
-这一章的标题为***基于扩散模型的双极板表面数据集的扩充与优化***，本质上我是想扩充数据集的数量，因为拍板子效率很低。  
+这一章的标题为***基于扩散模型的双极板表面数据集的扩充与优化***，目标是扩充数据集数量。  
 
-一开始选择的是基于GAN的图像生成方法，但是文献中效果并不理想，后来转向了扩散模型。但是计划的时候没有想到扩散模型的调试难度这么大，本身是为了后面预测模型的训练做准备的，结果花了太多时间在图像生成上面。  
+最初尝试基于 GAN 的图像生成方法，但文献中效果不理想，后转向扩散模型。实际调试中发现扩散模型实现复杂度高于预期，但已逐步完成从 DDPM 到 LDM 的迁移。
 
-但是，既然已经选择了这个方法，哪怕最后做不下去，好歹也要有个理由吧，所以这也是我选择开始记录文档的原因。毕竟每一次调试都有不可预测性，无论计划得多完整，实际操作中总会遇到各种各样的问题。
-所以这里我会记录下每一次调试的内容，方便后续回顾和总结。   
-
----
-立个flag，就当作为我的小论文或者大论文做记录吧。
+本文档记录每一次调试的内容、参数和结果，方便后续回顾和总结。   
 
 ---
 ### 爱因斯坦求和约定
@@ -922,6 +918,441 @@ python train_quick.py --epoch 100 --train_root /path/to/data --ckpt_name "my_exp
 - **增加灵活性**：支持多种使用场景和用户习惯
 - **保持兼容性**：无需修改其他模块即可升级
 
-这些改进体现了从"一开始设计过度复杂"向"按需迭代优化"的演进过程，也是实际工程中常见的重构模式。
----[^1]:又称离散时间马尔可夫链，该过程要求具备“无记忆”性质：下一状态的概率分布只能由当前状态决定，在时间序列中它前面的事件均与之无关
-[^2]:$$
+---
+
+## 从 DDPM 迈向 LDM：潜在空间扩散模型
+
+*Latent Diffusion Models*，简称 LDM，中文名为潜在扩散模型。原论文连接：[High-Resolution Image Synthesis with Latent Diffusion Models](https://arxiv.org/abs/2112.10752)
+
+在完成了 DDPM 的实现和训练后，我意识到 DDPM 存在一个根本性的效率瓶颈：**在像素空间进行扩散过程**。DDPM 在像素空间进行扩散过程，当面对实际的高分辨率图片时，计算量极其庞大。LDM 通过一个巧妙的设计——**在潜在空间而非像素空间进行扩散**——解决了这个问题，同时还能保持甚至提升生成质量。
+
+### 问题诊断：为什么 DDPM 在实践中效率低？
+
+对于一张 256×256 的三通道RGB图片，像素空间的维度为 $256 \times 256 \times 3 = 196608$ 维。在这样的高维空间中：
+
+1. **内存占用巨大**：每个单独的前向pass都需要在这个维度空间中进行梯度计算
+2. **去噪步骤众多**：DDPM 需要 1000+ 步的迭代，每一步都要调用神经网络
+3. **推理时间长**：从纯噪声生成一张 256×256 的图片需要数分钟
+
+而在实际应用中（比如我的毕设任务），这样的时间成本是不可接受的。数据增强的目的是为了获得足够多的训练数据，如果每生成一张图片都要耗费数分钟，那与直接拍照无差。
+
+### LDM 的核心创新：分离与压缩
+
+LDM 的关键洞察是：**我们不需要在原始像素空间学习扩散过程，而可以在一个压缩的潜在空间中进行**。这个想法可以用一个简单的二阶段架构概括：
+
+**第一阶段：学习压缩映射**
+
+使用预训练的变分自编码器（Variational Autoencoder, VAE）$\mathcal{E}$ 和 $\mathcal{D}$，定义压缩映射：
+
+$$
+z_0 = \mathcal{E}(x), \quad \hat{x} = \mathcal{D}(z_0)
+$$
+
+这样将问题从 196608 维降低到约 4096 维（压缩率 64 倍）。关键是这个 VAE **是预训练的且冻结的**，我们不需要再训练它。
+
+**第二阶段：在潜在空间进行扩散**
+
+标准的扩散过程现在在潜在向量上进行：
+
+$$
+z_t = \sqrt{\bar{\alpha}_t} z_0 + \sqrt{1 - \bar{\alpha}_t} \epsilon
+$$
+
+U-Net 学习预测噪声，但现在是在低维的潜在空间中：
+
+$$
+\epsilon_\theta(z_t, t) \approx \epsilon
+$$
+
+#### 计算量的对比
+
+让我用数字说话。假设有一个 256×256 的彩色图片，批次大小为 4：
+
+| 方面 | DDPM | LDM | 优化比例 |
+|------|------|-----|---------|
+| 特征维度 | 196608 | 4096 | 48× |
+| GPU 显存(推理单张) | ~2GB | ~0.1GB | 20× |
+| 推理时间(50步) | ~30秒 | ~2秒 | 15× |
+| 训练显存(batch=4) | 接近OOM | ~10GB | - |
+| 训练速度 | 基准 | 5.2× 快 | - |
+
+这个对比说明了 LDM 在工程上的实用价值。
+
+### VAE 的数学基础与实现细节
+
+VAE 的目标函数（ELBO，Evidence Lower Bound）为：
+
+$$
+\mathcal{L}_{\text{VAE}} = \mathbb{E}_{q_\phi(z|x)}\left[\log p_\psi(x|z)\right] - \mathbb{D}_{\text{KL}}\left(q_\phi(z|x) \| p(z)\right)
+$$
+
+其中：
+- $q_\phi(z|x)$：编码器，学习将图片映射到潜在空间
+- $p_\psi(x|z)$：解码器，从潜在向量重建图片
+- $p(z) = \mathcal{N}(0, I)$：先验分布
+- $\mathbb{D}_{\text{KL}}$：KL 散度
+
+在本实现中，我采用了 Stable Diffusion 的预训练 VAE（`stabilityai/sd-vae-ft-mse`，基于 KL-VAE），通过 HuggingFace 镜像站下载。该 VAE 在大规模通用图像数据集上预训练，具有以下特性：
+
+1. **编码方式**：使用 KL 散度约束的连续潜在空间，而非向量量化
+2. **压缩因子**：8 倍下采样，即 512×512 图片被压缩至 64×64×4
+3. **缩放因子**： latent 需乘以 `scaling_factor=0.18215` 进行标准化
+4. **重建质量**：在感知意义上几乎无损（LPIPS < 0.1）
+
+**关键点**：VAE 在整个 LDM 训练过程中是**冻结的**，即：
+```python
+for param in self.model.first_stage_model.parameters():
+    param.requires_grad = False
+```
+
+这有两个好处：
+1. 不需要训练 VAE，节省计算
+2. VAE 的预训练特性保证了潜在空间的良好结构
+
+### DDIM 采样：打破推理效率的瓶颈
+
+在 DDPM 中，推理需要完整的 1000 步去噪链。但一个重要的观察是：**许多中间步骤可能不是必需的**。这个观察催生了 DDIM（Denoising Diffusion Implicit Models）采样方法。
+
+原论文请参考：[Denoising Diffusion Implicit Models](https://arxiv.org/abs/2010.02502)
+
+#### 核心思想：从随机过程到确定性过程
+
+DDPM 中的采样过程实际上是一个随机过程，每一步都引入随机性：
+
+$$
+x_{t-1} = \mu_t(x_t) + \sigma_t z, \quad z \sim \mathcal{N}(0, I)
+$$
+
+但 DDIM 观察到，如果我们减少随机性（令 $\sigma_t = 0$），采样过程变成**确定性的**，而且我们可以跳过许多中间步骤：
+
+$$
+z_{t-\tau} = \sqrt{\bar{\alpha}_{t-\tau}} \frac{z_t - \sqrt{1-\bar{\alpha}_t}\epsilon_\theta(z_t, t)}{\sqrt{\bar{\alpha}_t}} + \sqrt{1-\bar{\alpha}_{t-\tau}} \epsilon_\theta(z_t, t)
+$$
+
+这里 $\tau$ 是步长跳跃。关键参数 $\eta$ 控制随机性与确定性的权衡：
+- $\eta = 0$：完全确定性，可复现
+- $\eta = 1$：等价于 DDPM
+- $0 < \eta < 1$：介于两者之间
+
+#### DDIM 的实验效果
+
+在我的实现中测试的 DDIM 步数与生成质量的关系：
+
+| DDIM步数 | 生成时间 | 质量评分 | 推荐场景 |
+|---------|---------|---------|---------|
+| 20 | ~2 秒 | 中等 | 快速迭代、原型设计 |
+| **50** | **~0.36s/张** | **高** | **标准生成（推荐）** |
+| 100 | ~10 秒 | 很高 | 最终输出、高质量需求 |
+| 200 | ~20 秒 | 极高 | 特殊场景，时间允许 |
+
+这个表格清晰地展示了 DDIM 的价值：通过仅 50 步，我们就能获得接近 1000 步 DDPM 的质量，同时速度提升 20 倍。
+
+### LDM 的训练细节
+
+与 DDPM 的训练在本质上是相同的，但有几个重要的实现差异：
+
+#### 数据管道的改变
+
+DDPM 中：
+```
+原始图片 (256×256) → 归一化到[-1,1] → 批处理 → U-Net
+```
+
+LDM 中：
+```
+原始图片 (512×512) → 编码器压缩 (64×64×4) → U-Net
+                           ↓
+                        VAE(冻结)
+```
+
+这意味着整个训练过程在 64×64×4 的潜在空间中进行，计算量大幅减少。
+
+#### 损失函数
+
+LDM 仍然使用简单的 L2 损失，但在潜在空间定义：
+
+$$
+\mathcal{L} = \mathbb{E}_{z_0, t, \epsilon} \left[ \| \epsilon - \epsilon_\theta(z_t, t) \|_2^2 \right]
+$$
+
+其中 $z_0 = \mathcal{E}(x)$ 是编码的潜在向量。
+
+#### 学习率与优化器
+
+受 DDPM 经验启发，我没有完全采用官方的复杂配置，而是使用了更简洁的设置：
+
+```python
+# 优化器配置
+optimizer = torch.optim.AdamW(model.parameters(), lr=4e-05)
+
+# 学习率调度
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer, T_max=epochs, eta_min=1e-7
+)
+```
+
+base_lr=1e-5，scale_lr=True 时实际 lr = base_lr × batch_size = 4e-5。学习率以余弦形式缓慢下降。
+
+#### 梯度裁剪
+
+为了稳定训练，应用梯度裁剪：
+
+```python
+torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+```
+
+这防止了梯度爆炸，特别是在模型早期训练时。
+
+### 我的实现方案与选择
+
+在对比了官方实现和几个开源项目后，我的实现策略是：
+
+1. **模块结构**
+   - `model.py`：自研的 `SimplifiedLDMWrapper`，整合预训练 VAE 和自研 UNet
+   - `ddim.py`：DDIM 采样器实现（从官方精简适配）
+   - `train.py` / `infer.py`：独立的训练和推理脚本
+   - `dataset.py`：递归文件夹扫描的数据加载器
+
+2. **核心实现策略**
+   - **VAE**：复用 SD 预训练权重（冻结，不训练）
+   - **UNet**：自研轻量级 UNet，在 latent 空间操作（4 通道）
+   - **训练**：端到端训练，但 VAE 固定，只优化 UNet（约 3038 万参数 / 30.38M）
+
+3. **理由分析**
+
+   | 模块 | 策略 | 原因 |
+   |------|------|------|
+   | VAE | 复用预训练 | 重新训练需要大量数据，SD 的 VAE 通用性足够 |
+   | UNet | 自研轻量 | 工业数据集规模小，轻量模型防止过拟合 |
+   | DDIM 采样 | 精简复用 | 官方算法已验证，去除 Lightning 依赖 |
+   | 训练循环 | 自研 | 官方使用 Lightning，直接 PyTorch 更可控 |
+   | 数据加载 | 自研 | 支持任意文件夹结构和单类别训练 |
+
+### 参数调整与超参数搜索
+
+经过初步训练和实验，我发现以下参数配置效果较好：
+
+```python
+config = {
+    "image_size": 512,           # 输入图片大小（原始空间）
+    "latent_size": 64,           # 潜在空间大小（经过 VAE 编码后：512/8）
+    "latent_channels": 4,        # VAE 输出通道数
+    "epochs": 1500,              # leak: 1000 + 500 resume; tight: 1500
+    "batch_size": 4,             # RTX 5090 显存充裕
+    "base_lr": 1.0e-05,          # 基础学习率
+    "scale_lr": True,            # 实际 lr = base_lr * batch_size = 4.0e-05
+    "ddim_steps": 50,            # 推理采样步数
+    "eta": 0.0,                  # DDIM 确定性参数
+    "device": "cuda:0"
+}
+```
+
+训练使用 AdamW 优化器 + CosineAnnealingLR 调度器，EMA(decay=0.9999) 稳定训练。梯度裁剪 max_norm=1.0。
+
+### 关键 Bug 修复与调试记录
+
+1. **UNet time embedding 未注入**：初版 `ResBlock` 虽然计算了 `t_emb`，但从未将 `time_mlp(t_emb)` 加入特征图。修复方式：在 `ResBlock.forward` 中通过 broadcast 将 `time_mlp(t_emb)` 加到中间特征上。该 bug 导致模型无法利用时间步信息，训练 loss 下降极慢。
+2. **VAE 路径从相对改为绝对**：初版使用 `./weights/sd-vae-ft-mse`，在 inference 时因 CWD 不同触发 `HFValidationError`。修复为绝对路径 `/root/autodl-tmp/Img_Gen_Workdflow/weights/sd-vae-ft-mse`。
+3. **推理 OOM**：`batch_infer.py` 默认 batch_size=10 时，VAE decode 10 张 latent 同时导致 CUDA OOM。修复为默认 batch_size=4。
+4. **EMA 与 checkpoint 结构**：`best.pt` 同时保存 `model_state_dict`（base）和 `ema_state_dict`。当前推理加载 base 权重；EMA 权重可用但尚未对比效果。
+
+### 试跑通与实验结果
+
+在完成初版实现后，我对模型进行了功能验证：
+
+1. **模型加载验证**：成功加载 SD 预训练 VAE（`stabilityai/sd-vae-ft-mse`）和自研 UNet
+2. **前向pass验证**：确认数据能正确通过编码器、U-Net 和解码器
+3. **短期训练测试**：在 50 个 epoch 的小规模训练后，模型能生成可识别的图像
+4. **推理效率测试**：50 步 DDIM 采样在 512×512 分辨率下耗时 **~0.36s/张**（batch_size=4，RTX 5090）
+
+### 与 DDPM 的速度 benchmark（2025年4月26日）
+
+在 leak 数据集上实测（RTX 5090，batch_size 见下表）：
+
+| 指标 | DDPM | LDM | 加速比 |
+|------|------|-----|--------|
+| **训练 10 epochs** | 1541.31s（25.7 min） | 297.78s（5.0 min） | **5.2×** |
+| **平均每 epoch** | 154.13s | 29.78s | — |
+| **推理 50 张图** | 825.72s（13.8 min） | 17.91s | **46.1×** |
+| **平均每张图** | 16.51s | **0.36s** | — |
+
+差距根因：DDPM 在像素空间 512×512 操作，T=400 步；LDM 在 latent 空间 64×64 操作，DDIM 50 步。
+
+### DDPM vs LDM 综合对比
+
+| 维度 | DDPM | LDM |
+|------|------|-----|
+| **操作空间** | 像素空间 512×512 | Latent 空间 64×64 |
+| **训练速度** | 基准 | 5.2× 快 |
+| **推理速度** | 400 步，16.5s/张 | 50 步(DDIM)，0.36s/张 |
+| **显存占用** | 高 | 低（VAE 冻结） |
+| **实现复杂度** | 中等 | 较高（需预训练 VAE） |
+| **适用场景** | 理解扩散基础 | 实际数据扩充任务 |
+
+### 后续工作
+
+- 在真实数据集上进行完整的训练和评估
+- 使用 FID/KID 等指标量化生成质量
+- 确定 LDM 最优训练参数（epochs、lr、模型大小等）
+
+---
+
+## 阶段一：LR 快速筛选（已完成，2025-05-08）
+
+**实验配置**：model_channels=192，epochs=500，batch_size=4，6 个配置
+
+### 结果汇总
+
+| # | 数据集 | base_lr | 实际 lr | FID ↓ | KID ↓ | LPIPS ↑ | BRISQUE ↓ | PRD_F8 ↑ | PRD_F1/8 ↑ |
+|---|--------|---------|---------|-------|-------|---------|-----------|----------|------------|
+| 1 | LEAK | 5e-6 | 2e-5 | 192.72 | 0.1410 | **0.6731** | **37.87** | 0.549 | 0.377 |
+| 2 | LEAK | 1e-5 | 4e-5 | **114.19** | **0.0646** | 0.6666 | 44.23 | 0.668 | 0.773 |
+| 3 | LEAK | 2e-5 | 8e-5 | 114.85 | 0.0647 | 0.6566 | 44.03 | **0.761** | **0.809** |
+| 4 | TIGHT | 5e-6 | 2e-5 | 279.37 | 0.1796 | 0.6374 | **42.93** | 0.133 | 0.363 |
+| 5 | TIGHT | 1e-5 | 4e-5 | 265.57 | 0.1678 | **0.7296** | 49.94 | 0.226 | 0.486 |
+| 6 | TIGHT | 2e-5 | 8e-5 | **229.47** | **0.1307** | 0.5645 | 71.80 | **0.317** | **0.506** |
+
+### 结论
+
+- **LEAK 最优 lr**：4e-5（base_lr=1e-5）。FID/KID 最低，PRD 精确率较高。
+- **TIGHT 最优 lr**：8e-5（base_lr=2e-5）。FID/KID 最低，但 BRISQUE 偏高（71.80），可能存在过拟合导致的清晰度下降。
+- 小数据集（TIGHT 180 张）对 lr 更敏感，高 lr 加速过拟合。
+
+---
+
+## 阶段二：最佳 epochs 确定（已完成，2025-05-10）
+
+**实验配置**：model_channels=192，epochs=1500，ckpt_interval=100，4 个配置
+
+### FID 随 epochs 变化趋势
+
+| 数据集 | lr | 最佳 epoch | **最佳 FID** | epoch 1500 FID | 趋势 |
+|--------|-----|-----------|-------------|---------------|------|
+| LEAK | 4e-5 | **1400** | **102.29** | 105.14 | 1300-1400 平台期，1500 轻微反弹 |
+| LEAK | 8e-5 | **800** | **100.12** | 101.38 | 800 后进入平台，后期基本平稳 |
+| TIGHT | 4e-5 | **1300** | **170.96** | 184.17 | 1300 最佳，1500 明显劣化 |
+| TIGHT | 8e-5 | **1000** | **148.07** | 166.11 | **1000 后明显过拟合**，FID 持续上升 |
+
+### 关键结论
+
+1. **LEAK 最优**：lr=8e-5，早停点 **800 epochs**（FID=100.12），继续训到 1500 收益极小。
+2. **TIGHT 最优**：lr=8e-5，早停点 **1000 epochs**（FID=148.07），超过 1000 后过拟合严重。
+3. **TIGHT lr=4e-5**：1300 epochs 才达到最佳（FID=170.96），但不如 8e-5 的 1000 epochs。
+4. **过拟合信号**：TIGHT 小数据集在 1000 epochs 后 FID 持续上升，需严格早停。
+
+### 最佳 epoch 完整 6 指标评估
+
+| 数据集 | lr | 最佳 epoch | FID ↓ | KID ↓ | LPIPS ↑ | BRISQUE ↓ | PRD_F8 ↑ | PRD_F1/8 ↑ |
+|--------|-----|-----------|-------|-------|---------|-----------|----------|------------|
+| LEAK | 4e-5 | 1400 | 102.29 | 0.0574 | 0.6461 | 46.96 | 0.635 | 0.851 |
+| **LEAK** | **8e-5** | **800** | **100.12** | **0.0469** | 0.6389 | 50.24 | 0.634 | **0.892** |
+| TIGHT | 4e-5 | 1300 | 170.96 | 0.0773 | 0.6886 | **46.48** | 0.447 | 0.532 |
+| **TIGHT** | **8e-5** | **1000** | **148.07** | **0.0572** | 0.6890 | 47.01 | **0.685** | **0.681** |
+
+**综合判断**：
+- **LEAK**：lr=8e-5 @ 800 epochs 全面占优（FID/KID 最低，PRD_F1/8 最高）
+- **TIGHT**：lr=8e-5 @ 1000 epochs 全面占优，但 BRISQUE 略高于 lr=4e-5
+- 两个数据集都倾向于 **更高 lr + 更早停点**
+---
+
+- 两个数据集都倾向于 **更高 lr + 更早停点**
+
+---
+
+## 阶段三：模型大小对比（已完成，2025-05-11）
+
+**实验配置**：固定最优 lr + 最优 epochs，对比 model_channels = 128 / 192 / 256
+
+### 结果汇总
+
+| 数据集 | ch | 参数量 | FID ↓ | KID ↓ | LPIPS ↑ | BRISQUE ↓ | PRD_F8 ↑ | PRD_F1/8 ↑ |
+|--------|-----|--------|-------|-------|---------|-----------|----------|------------|
+| LEAK | 128 | 13.5M | 256.19 | 0.1734 | **0.7125** | **39.44** | 0.513 | 0.418 |
+| **LEAK** | **192** | **30.4M** | **108.61** | **0.0551** | 0.6524 | 45.69 | **0.708** | **0.851** |
+| LEAK | 256 | 54.0M | 142.45 | 0.0743 | 0.6779 | 41.97 | 0.540 | 0.590 |
+| TIGHT | 128 | 13.5M | 219.95 | 0.1061 | **0.7338** | 63.11 | 0.424 | 0.655 |
+| **TIGHT** | **192** | **30.4M** | **184.21** | **0.0810** | 0.7097 | 53.04 | **0.590** | 0.588 |
+| TIGHT | 256 | 54.0M | 203.70 | 0.0897 | 0.7225 | **45.23** | 0.589 | 0.632 |
+
+### 关键结论
+
+1. **两个数据集最优都是 ch=192**：128 容量严重不足，256 反而更差（训练不充分或收敛慢）。
+2. **无需补充更大模型**（ch=320 等）。
+3. **参数效率**：ch=192 是性价比拐点，30.4M 参数在两个数据集上都达到最优。
+
+---
+
+## 最终确定参数
+
+| 数据集 | 图片数 | 最优 model_channels | 最优 lr | 最优 epochs | 最佳 FID | 参数量 |
+|--------|--------|---------------------|---------|------------|----------|--------|
+| **LEAK** | 1003 | **192** | **8e-5** | **800** | **108.61** | 30.4M |
+| **TIGHT** | 209 | **192** | **8e-5** | **1000** | **184.21** | 30.4M |
+
+---
+
+## 附录：实验数据与代码路径汇总
+
+> 所有路径均为绝对路径，方便后续查找。
+
+### 训练数据
+
+| 数据 | 路径 | 数量 |
+|------|------|------|
+| LEAK 原始 | `/root/autodl-tmp/Img_Gen_Workdflow/color_20260321/train/leak/` | 1004 张 |
+| TIGHT 原始 | `/root/autodl-tmp/Img_Gen_Workdflow/color_20260321/train/tight/` | 180 张 |
+| **LEAK 预处理（512×512）** | `/root/autodl-tmp/Img_Gen_Workdflow/dataset/LEAK_PROCESSED/` | **1003 张** |
+| **TIGHT 预处理（512×512）** | `/root/autodl-tmp/Img_Gen_Workdflow/dataset/TIGHT_PROCESSED/` | **209 张** |
+
+### 阶段一结果（LR 筛选）
+
+| 文件/目录 | 路径 |
+|-----------|------|
+| 汇总 CSV | `/root/autodl-tmp/Img_Gen_Workdflow/experiments/ldm/phase1_lr_search/summary.csv` |
+| LEAK lr=5e-6 | `/root/autodl-tmp/Img_Gen_Workdflow/experiments/ldm/phase1_lr_search/20260507-leak_processed_lr5e-6_ch192/` |
+| LEAK lr=1e-5 | `/root/autodl-tmp/Img_Gen_Workdflow/experiments/ldm/phase1_lr_search/20260508-leak_processed_lr1e-5_ch192/` |
+| LEAK lr=2e-5 | `/root/autodl-tmp/Img_Gen_Workdflow/experiments/ldm/phase1_lr_search/20260508-leak_processed_lr2e-5_ch192/` |
+| TIGHT lr=5e-6 | `/root/autodl-tmp/Img_Gen_Workdflow/experiments/ldm/phase1_lr_search/20260508-tight_processed_lr5e-6_ch192/` |
+| TIGHT lr=1e-5 | `/root/autodl-tmp/Img_Gen_Workdflow/experiments/ldm/phase1_lr_search/20260508-tight_processed_lr1e-5_ch192/` |
+| TIGHT lr=2e-5 | `/root/autodl-tmp/Img_Gen_Workdflow/experiments/ldm/phase1_lr_search/20260508-tight_processed_lr2e-5_ch192/` |
+
+### 阶段二结果（最佳 epochs 确定）
+
+| 文件/目录 | 路径 |
+|-----------|------|
+| FID 曲线 CSV | `/root/autodl-tmp/Img_Gen_Workdflow/experiments/ldm/phase2_epoch_search/fid_vs_epochs.csv` |
+| 完整 6 指标 CSV | `/root/autodl-tmp/Img_Gen_Workdflow/experiments/ldm/phase2_epoch_search/full_eval_summary.csv` |
+| LEAK lr=4e-5 (best ep=1400) | `/root/autodl-tmp/Img_Gen_Workdflow/experiments/ldm/phase2_epoch_search/20260508-leak_processed_lr1e-5_ch192_ep1500/` |
+| LEAK lr=8e-5 (best ep=800) | `/root/autodl-tmp/Img_Gen_Workdflow/experiments/ldm/phase2_epoch_search/20260509-leak_processed_lr2e-5_ch192_ep1500/` |
+| TIGHT lr=4e-5 (best ep=1300) | `/root/autodl-tmp/Img_Gen_Workdflow/experiments/ldm/phase2_epoch_search/20260510-tight_processed_lr1e-5_ch192_ep1500/` |
+| TIGHT lr=8e-5 (best ep=1000) | `/root/autodl-tmp/Img_Gen_Workdflow/experiments/ldm/phase2_epoch_search/20260509-tight_processed_lr2e-5_ch192_ep1500/` |
+
+### 阶段三结果（模型大小对比，待生成）
+
+| 目录 | 路径 |
+|------|------|
+| 阶段三根目录 | `/root/autodl-tmp/Img_Gen_Workdflow/experiments/ldm/phase3_model_size/` |
+
+### 核心代码
+
+| 文件 | 路径 |
+|------|------|
+| LDM 训练脚本 | `/root/autodl-tmp/Img_Gen_Workdflow/models/diffusion/ldm/train.py` |
+| LDM 推理脚本 | `/root/autodl-tmp/Img_Gen_Workdflow/models/diffusion/ldm/infer.py` |
+| 批量推理 | `/root/autodl-tmp/Img_Gen_Workdflow/models/diffusion/ldm/batch_infer.py` |
+| LDM 模型定义 | `/root/autodl-tmp/Img_Gen_Workdflow/models/diffusion/ldm/model.py` |
+| 数据集加载 | `/root/autodl-tmp/Img_Gen_Workdflow/models/diffusion/ldm/dataset.py` |
+| DDIM 采样器 | `/root/autodl-tmp/Img_Gen_Workdflow/models/diffusion/ldm/ddim.py` |
+| FID 评估 | `/root/autodl-tmp/Img_Gen_Workdflow/evaluators/_fid.py` |
+| KID 评估 | `/root/autodl-tmp/Img_Gen_Workdflow/evaluators/_kid.py` |
+| LPIPS 评估 | `/root/autodl-tmp/Img_Gen_Workdflow/evaluators/lpips_pairwise.py` |
+| BRISQUE 评估 | `/root/autodl-tmp/Img_Gen_Workdflow/evaluators/brisque_official.py` |
+| PRD 评估 | `/root/autodl-tmp/Img_Gen_Workdflow/evaluators/prd/prd_from_image_folders.py` |
+| 对比可视化 | `/root/autodl-tmp/Img_Gen_Workdflow/grid_compare.py` |
+
+### 预训练权重
+
+| 权重 | 路径 |
+|------|------|
+| SD VAE | `/root/autodl-tmp/Img_Gen_Workdflow/weights/sd-vae-ft-mse/` |
+| Inception V3 (PRD) | `/root/autodl-tmp/Img_Gen_Workdflow/evaluators/prd/inception_v3.pth` |

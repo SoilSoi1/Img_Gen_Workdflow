@@ -1,0 +1,29 @@
+# 图像生成质量评估 (Evaluators) 依赖
+# 安装命令: pip install -r requirements.txt
+#
+# 注意: torch/torchvision 若有 CUDA 版本需求，建议通过官网命令安装:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+
+# 核心深度学习框架
+torch>=1.9.0
+torchvision>=0.10.0
+
+# 图像质量评估库
+clean-fid>=0.1.35
+lpips>=0.1.4
+brisque>=0.0.15
+
+# 计算机视觉
+opencv-python>=4.5.0
+
+# 科学计算与可视化
+numpy>=1.19.0
+scikit-learn>=0.24.0
+matplotlib>=3.3.0
+scipy>=1.5.0
+
+# 图像处理
+Pillow>=8.0.0
+
+# 工具库
+tqdm>=4.60.0

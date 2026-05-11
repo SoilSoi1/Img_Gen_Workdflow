@@ -1,0 +1,7 @@
+dataset,base_lr,actual_lr,model_channels,epochs,save_dir,fid
+LEAK_PROCESSED,5e-6,2.00e-05,192,500,/root/autodl-tmp/Img_Gen_Workdflow/experiments/ldm/phase1_lr_search/20260507-leak_processed_lr5e-6_ch192,192.7223741743376,0.14101625978946686,0.6731281713843346,37.86713930361356,0.549,0.377
+LEAK_PROCESSED,1e-5,4.00e-05,192,500,/root/autodl-tmp/Img_Gen_Workdflow/experiments/ldm/phase1_lr_search/20260508-leak_processed_lr1e-5_ch192,114.18793174330341,0.06458530575037003,0.666608455657959,44.22941994074041,0.668,0.773
+LEAK_PROCESSED,2e-5,8.00e-05,192,500,/root/autodl-tmp/Img_Gen_Workdflow/experiments/ldm/phase1_lr_search/20260508-leak_processed_lr2e-5_ch192,114.84989144494178,0.06474094092845917,0.656564194381237,44.0301868003428,0.761,0.809
+TIGHT_PROCESSED,5e-6,2.00e-05,192,500,/root/autodl-tmp/Img_Gen_Workdflow/experiments/ldm/phase1_lr_search/20260508-tight_processed_lr5e-6_ch192,279.3703833721722,0.17963312566280365,0.6374342250227928,42.92645922127006,0.133,0.363
+TIGHT_PROCESSED,1e-5,4.00e-05,192,500,/root/autodl-tmp/Img_Gen_Workdflow/experiments/ldm/phase1_lr_search/20260508-tight_processed_lr1e-5_ch192,265.5656009121145,0.16781160235404968,0.7296060462892056,49.941224406227384,0.226,0.486
+TIGHT_PROCESSED,2e-5,8.00e-05,192,500,/root/autodl-tmp/Img_Gen_Workdflow/experiments/ldm/phase1_lr_search/20260508-tight_processed_lr2e-5_ch192,229.46857374249308,0.13069504499435425,0.564478786289692,71.7964833306825,0.317,0.506

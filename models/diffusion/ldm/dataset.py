@@ -40,23 +40,14 @@ class UnconditionalImageDataset(Dataset):
         if len(self.image_paths) == 0:
             raise ValueError(f"No images found in {data_dir}")
         
-        # Image preprocessing: center crop + resize + normalize to [-1, 1]
+        # Image preprocessing: normalize to [-1, 1]
+        # NOTE: data is already 512x512, no crop/resize needed
         self.transform = transforms.Compose([
-            transforms.Lambda(self._center_crop),
-            transforms.Resize((image_size, image_size), interpolation=Image.LANCZOS),
             transforms.ToTensor(),  # [0, 1]
             transforms.Normalize(mean=[0.5] * 3, std=[0.5] * 3),  # [-1, 1]
         ])
         
         print(f"[Dataset] Found {len(self.image_paths)} images in {data_dir}")
-    
-    def _center_crop(self, img):
-        """Center crop image to square."""
-        w, h = img.size
-        crop_size = min(w, h)
-        left = (w - crop_size) // 2
-        top = (h - crop_size) // 2
-        return img.crop((left, top, left + crop_size, top + crop_size))
     
     def __len__(self):
         return len(self.image_paths)

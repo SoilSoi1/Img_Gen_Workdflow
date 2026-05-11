@@ -167,13 +167,15 @@ class LDMTrainer:
         config.model.params.unet_config.params.out_channels = 4
         
         # Create full LDM wrapper with VAE + UNet
-        self.model = SimplifiedLDMWrapper(config.model, self.device, image_size=self.config['image_size'])
+        model_channels = self.config.get('model_channels', 192)
+        self.model = SimplifiedLDMWrapper(config.model, self.device, image_size=self.config['image_size'], model_channels=model_channels)
         self.model = self.model.to(self.device)
         
-        # Count parameters
-        n_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-        print(f"[Model] #Parameters (trainable): {n_params:,}")
+        # Count parameters (UNet only, VAE is frozen)
+        n_params = sum(p.numel() for p in self.model.unet.parameters() if p.requires_grad)
+        print(f"[Model] UNet #Parameters (trainable): {n_params:,}")
         print(f"[Model] Image size: {self.config['image_size']}")
+        print(f"[Model] model_channels: {model_channels}")
         print(f"[Model] Channels: {self.config.get('channels', 3)}")
     
     def _setup_optimizer(self):
@@ -318,6 +320,7 @@ class LDMTrainer:
             'scheduler_state_dict': self.scheduler.state_dict(),
             'global_step': self.global_step,
             'image_size': self.config['image_size'],
+            'model_channels': self.config.get('model_channels', 192),
             'ema_shadow': self.ema.state_dict(),
         }
         
@@ -354,7 +357,7 @@ def get_default_config():
     """Get default configuration."""
     return {
         # Data
-        'train_root': './datasets/color_20260321/train',
+        'train_root': '/root/autodl-tmp/Img_Gen_Workdflow/dataset/LEAK_PROCESSED',
         'val_root': None,
         'image_size': 512,
         'channels': 3,
@@ -366,6 +369,7 @@ def get_default_config():
         'base_lr': 1.0e-05,
         'scale_lr': True,
         'grad_clip': 1.0,
+        'model_channels': 192,
         
         # Saving
         'save_dir': './experiments/ldm/exp_1',
@@ -391,8 +395,11 @@ def main():
     parser.add_argument('--batch_size', type=int, default=4, help='Batch size')
     parser.add_argument('--num_workers', type=int, default=4, help='Number of workers')
     parser.add_argument('--base_lr', type=float, default=1.0e-05, help='Base learning rate')
-    parser.add_argument('--scale_lr', action='store_true', help='Scale LR by batch size')
+    parser.add_argument('--scale_lr', dest='scale_lr', action='store_true', help='Scale LR by batch size (default)')
+    parser.add_argument('--no_scale_lr', dest='scale_lr', action='store_false', help='Do not scale LR by batch size')
+    parser.set_defaults(scale_lr=True)
     parser.add_argument('--grad_clip', type=float, default=1.0, help='Gradient clipping')
+    parser.add_argument('--model_channels', type=int, default=192, help='UNet base channel width')
     
     # Saving
     parser.add_argument('--save_dir', type=str, default=None, help='Save directory')
@@ -415,12 +422,15 @@ def main():
     
     # Auto-generate save_dir if not provided
     if args.save_dir is None:
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        config['save_dir'] = f"./experiments/ldm/{timestamp}"
+        timestamp = datetime.now().strftime("%Y%m%d")
+        dataset_name = Path(config['train_root']).name.lower()
+        actual_lr = config['base_lr'] * config['batch_size'] if config.get('scale_lr', True) else config['base_lr']
+        ch = config.get('model_channels', 192)
+        config['save_dir'] = f"./experiments/ldm/phase1_lr_search/{timestamp}-{dataset_name}_lr{actual_lr:.0e}_ch{ch}"
     
     # Validate required arguments
     if config['train_root'] is None:
-        config['train_root'] = './datasets/color_20260321/train'
+        config['train_root'] = '/root/autodl-tmp/Img_Gen_Workdflow/dataset/LEAK_PROCESSED'
     
     if not os.path.exists(config['train_root']):
         raise ValueError(f"Train root not found: {config['train_root']}")

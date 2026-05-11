@@ -24,8 +24,8 @@ modelConfig = {
     "pin_memory": True,
     # Training & Checkpoints
     "training_load_weight":"test_leak/20260321_194005/ckpt_1000epoch.pt",
-    "save_weight_dir": "./",
-    "test_load_weight":"weights/warmup_8000epoch.pt" ,
+    "save_weight_dir": "/root/autodl-tmp/Img_Gen_Workdflow/weights/",
+    "test_load_weight":"ddpm_leak_ckpt_1000_epoch.pt" ,
     # Sampling & Inference
     "sampled_dir": "./SampledImgs/",
     "sampledNoisyImgName": "NoisyNoGuidenceImgs.png",

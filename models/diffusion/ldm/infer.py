@@ -54,11 +54,14 @@ class LDMInference:
         # Load checkpoint first to get training config
         ckpt = torch.load(ckpt_path, map_location=self.device)
         
-        # Get image size from checkpoint if available
+        # Get image size and model_channels from checkpoint if available
         if isinstance(ckpt, dict) and 'image_size' in ckpt:
             self.image_size = ckpt['image_size']
         else:
             self.image_size = 512
+        
+        model_channels = ckpt.get('model_channels', 192) if isinstance(ckpt, dict) else 192
+        print(f"[Model] model_channels from checkpoint: {model_channels}")
         
         # Load LDM config
         config_path = Path(__file__).parent / "configs" / "latent-diffusion" / "celebahq-ldm-vq-4.yaml"
@@ -68,8 +71,8 @@ class LDMInference:
         print(f"[Model] Using config: {config_path}")
         config = OmegaConf.load(config_path)
         
-        # Instantiate model with correct image size
-        self.model = SimplifiedLDMWrapper(config.model, self.device, image_size=self.image_size)
+        # Instantiate model with correct image size and model_channels
+        self.model = SimplifiedLDMWrapper(config.model, self.device, image_size=self.image_size, model_channels=model_channels)
         self.model = self.model.to(self.device)
         self.model.eval()
         
